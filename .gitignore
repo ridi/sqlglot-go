@@ -1,0 +1,15 @@
+# Pinned Python reference source (tobymao/sqlglot v30.12.0) — used by porting agents
+# as the 1:1 source of truth. Not part of the Go module; not committed.
+/.reference/
+
+# Go
+*.test
+*.out
+/bin/
+/dist/
+coverage.txt
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/
