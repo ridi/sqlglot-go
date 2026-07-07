@@ -24,6 +24,11 @@ type Dialect struct {
 	SupportsFixedSizeArrays  bool
 	SupportsLimitAll         bool
 	IntervalSpans            bool
+	NormalizeFunctions       string
+	AliasPostTablesample     bool
+	AliasPostVersion         bool
+	UnnestColumnOnly         bool
+	IndexOffset              int
 }
 
 func Base() *Dialect {
@@ -38,6 +43,11 @@ func Base() *Dialect {
 		SupportsFixedSizeArrays:  false,
 		SupportsLimitAll:         false,
 		IntervalSpans:            true,
+		NormalizeFunctions:       "upper",
+		AliasPostTablesample:     false,
+		AliasPostVersion:         true,
+		UnnestColumnOnly:         false,
+		IndexOffset:              0,
 	}
 }
 

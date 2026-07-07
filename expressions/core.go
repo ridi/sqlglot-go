@@ -11,6 +11,19 @@ import (
 
 type Args = map[string]any
 
+type GenerateOptions struct {
+	Dialect            string
+	Pretty             bool
+	Identify           any
+	Normalize          bool
+	NormalizeFunctions any
+	LeadingComma       bool
+	MaxTextWidth       int
+	Comments           *bool
+}
+
+var GenerateFunc func(Expression, GenerateOptions) (string, error)
+
 type Expression interface {
 	Kind() Kind
 	Arg(key string) any
@@ -46,6 +59,7 @@ type Expression interface {
 	Pop() Expression
 	HashKey() uint64
 	Equal(Expression) bool
+	SQL(opts GenerateOptions) (string, error)
 	ToS() string
 	ErrorMessages(args []any) []string
 	IsString() bool
@@ -693,6 +707,13 @@ func (n *Node) Equal(other Expression) bool {
 		return true
 	}
 	return n.kind == other.Kind() && n.HashKey() == other.HashKey()
+}
+
+func (n *Node) SQL(opts GenerateOptions) (string, error) {
+	if GenerateFunc == nil {
+		return "", fmt.Errorf("expressions.GenerateFunc is not configured")
+	}
+	return GenerateFunc(n, opts)
 }
 
 func (n *Node) ToS() string { return toS(n, false, 0, false) }

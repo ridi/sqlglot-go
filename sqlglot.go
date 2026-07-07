@@ -2,10 +2,12 @@ package sqlglot
 
 import (
 	fmtstd "fmt"
+	"strings"
 
 	"github.com/sjincho/sqlglot-go/dialects"
 	sqlerrors "github.com/sjincho/sqlglot-go/errors"
 	"github.com/sjincho/sqlglot-go/expressions"
+	"github.com/sjincho/sqlglot-go/generator"
 	"github.com/sjincho/sqlglot-go/parser"
 	"github.com/sjincho/sqlglot-go/tokens"
 )
@@ -46,8 +48,46 @@ func ParseOne(sql string, dialect string) (expressions.Expression, error) {
 	return res[0], nil
 }
 
+func Generate(e expressions.Expression, dialect string, opts generator.Options) (string, error) {
+	d, err := dialects.GetOrRaise(dialect)
+	if err != nil {
+		return "", err
+	}
+	return generator.New(d, opts).Generate(e)
+}
+
+func Transpile(sql string, read string, write string, opts generator.Options) ([]string, error) {
+	if strings.TrimSpace(sql) == "" {
+		return []string{""}, nil
+	}
+	expressions, err := Parse(sql, read)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]string, 0, len(expressions))
+	for _, expression := range expressions {
+		generated, err := Generate(expression, write, opts)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, generated)
+	}
+	return out, nil
+}
+
 func init() {
 	expressions.MaybeParseFunc = func(sql string, dialect string) (expressions.Expression, error) {
 		return ParseOne(sql, dialect)
+	}
+	expressions.GenerateFunc = func(e expressions.Expression, opts expressions.GenerateOptions) (string, error) {
+		return Generate(e, opts.Dialect, generator.Options{
+			Pretty:             opts.Pretty,
+			Identify:           opts.Identify,
+			Normalize:          opts.Normalize,
+			NormalizeFunctions: opts.NormalizeFunctions,
+			LeadingComma:       opts.LeadingComma,
+			MaxTextWidth:       opts.MaxTextWidth,
+			Comments:           opts.Comments,
+		})
 	}
 }

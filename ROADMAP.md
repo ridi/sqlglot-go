@@ -32,9 +32,11 @@ Slices (ordered; each must land `go test ./...` green before the next):
      CONNECT BY / START WITH, angle-bracket inline STRUCT constructor, and the remaining
      long function tail. (None probe-critical; probe's KNOWN_ROOTS already parse.)
 
-2. GENERATOR CORE — generator.py: Generator + generate(); un-skip .sql()-dependent tests;
-   enables tests/fixtures/identity.sql round-trips (test_transpile subset). Required by
-   qualify (quote_identifiers) — on the critical path, not optional.
+2. GENERATOR CORE — DONE (branch sjcho/sqlglot-go/generator; 81 tests green). Base Generator
+   in a new generator/ package (table-driven Kind→sql dispatch, query-modifier clause order,
+   identifier quoting for quote_identifiers, ANSI string escaping, pretty/compact). identity.sql
+   round-trip: 732/955 pass, 203 need deferred 1d grammar, 20 gen-mismatch (tracked). Public
+   API: Generate / Transpile + Expression.SQL. MySQL/Postgres generator overrides → slice 5.
 
 3. SCHEMA — schema.py (MappingSchema), datatypes.py (DataType/DType build), time.py.
 
@@ -62,8 +64,10 @@ non-blocking for the foundation, must be resolved by the noted slice):
 - arg ordering: newNode orders args by argTypes declaration order, not caller insertion
   order (expressions/core.go newNode). Cosmetic now — HashKey sorts keys, and Expression-
   valued children traverse in the same relative order, so equality/find/walk are unaffected.
-  MUST fix before serde (slice 6) and review for the generator (slice 2), which depend on
-  faithful arg order. (Upstream preserves insertion order via a dict.)
+  GENERATOR (slice 2): verified NOT needed — the only generic-iteration emit path,
+  function_fallback_sql, iterates arg_types (class-declaration order), which argTypesFor(kind)
+  already provides independent of Node.argOrder. Still MUST fix before serde (slice 6), which
+  serializes the live args in order. (Upstream preserves insertion order via a dict.)
 - parser-level comment bubbling: `SELECT a FROM t /* after */` attaches the trailing comment
   to the inner Identifier(t) rather than the Table node; and `_parse_alias` does not yet move
   a mid-expression comment next to the alias (upstream parser.py:8499-8501). Tokenizer-level
@@ -86,6 +90,12 @@ Resolved in the foundation review pass (were latent, now fixed + regression-test
   index<0 through Set, the index-nil path). Tests: TestReplaceSingleValueArg, TestPopSingleValueArg.
 - _parse_alias built an invalid exp.Tuple{this:...} (Tuple has no `this` arg) → ArgError.
   Added exp.Aliases (this+expressions) and use it. Test: TestParseAliases.
+
+Resolved in the slice-2 review pass:
+- unnestSQL nil'd the local `offset` after folding WITH OFFSET AS <col> into the alias, so it
+  dropped WITH ORDINALITY (and turned an ordinality column into a plain data column). Upstream
+  clears only the offset ARG (generator.py:3444-3447 vs 3456-3457). Fixed in generator/sql.go.
+  Test: TestUnnestWithOrdinality.
 
 Resolved in the slice-1c review pass:
 - parseWindow parsed the frame EXCLUDE option with raise_unmatched=false; upstream

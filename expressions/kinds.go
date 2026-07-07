@@ -715,3 +715,17 @@ var varLenArgs = map[Kind]bool{
 	KindJSONExtractScalar: true,
 	KindDate:              true,
 }
+
+// ArgKeys returns the arg keys of a Kind in class-declaration order (mirrors
+// Python's iteration over Expr.arg_types). Used by the generator's function fallback.
+func ArgKeys(k Kind) []string {
+	specs := argTypesFor(k)
+	out := make([]string, len(specs))
+	for i, s := range specs {
+		out[i] = s.Key
+	}
+	return out
+}
+
+// ClassName returns the PascalCase class name for a Kind (e.g. "StddevPop").
+func ClassName(k Kind) string { return className[k] }

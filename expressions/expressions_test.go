@@ -128,6 +128,9 @@ func TestReplaceSingleValueArg(t *testing.T) {
 	if got := add.Expr().Name(); got != "b" {
 		t.Fatalf("Replace clobbered a sibling arg: Add.expression name = %q, want b", got)
 	}
+	if got, err := add.SQL(exp.GenerateOptions{}); err != nil || got != "z + b" {
+		t.Fatalf("Replace single-value arg SQL = %q, %v; want z + b", got, err)
+	}
 
 	// List-element args (Select.expressions[0]) must keep working too.
 	sel := parseOne(t, "SELECT a, b FROM x")
@@ -137,6 +140,9 @@ func TestReplaceSingleValueArg(t *testing.T) {
 	}
 	if got := sel.Expressions()[1].Name(); got != "b" {
 		t.Fatalf("Replace list-element arg clobbered sibling: second projection = %q, want b", got)
+	}
+	if got, err := sel.SQL(exp.GenerateOptions{}); err != nil || got != "SELECT c, b FROM x" {
+		t.Fatalf("Replace list-element arg SQL = %q, %v; want SELECT c, b FROM x", got, err)
 	}
 }
 
