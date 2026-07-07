@@ -19,28 +19,29 @@ const (
 )
 
 type Dialect struct {
-	TokenizerConfig          tokens.TokenizerConfig
-	NormalizationStrategy    NormalizationStrategy
-	DPipeIsStringConcat      bool
-	StrictStringConcat       bool
-	TypedDivision            bool
-	SafeDivision             bool
-	SupportsColumnJoinMarks  bool
-	ColonIsVariantExtract    bool
-	NullOrdering             string
-	SupportsOrderByAll       bool
-	TryCastRequiresString    *bool
-	DatePartMapping          map[string]string
-	ValidIntervalUnits       map[string]bool
-	SupportsUserDefinedTypes bool
-	SupportsFixedSizeArrays  bool
-	SupportsLimitAll         bool
-	IntervalSpans            bool
-	NormalizeFunctions       string
-	AliasPostTablesample     bool
-	AliasPostVersion         bool
-	UnnestColumnOnly         bool
-	IndexOffset              int
+	TokenizerConfig             tokens.TokenizerConfig
+	NormalizationStrategy       NormalizationStrategy
+	DPipeIsStringConcat         bool
+	StrictStringConcat          bool
+	TypedDivision               bool
+	SafeDivision                bool
+	SupportsColumnJoinMarks     bool
+	ColonIsVariantExtract       bool
+	NullOrdering                string
+	SupportsOrderByAll          bool
+	TryCastRequiresString       *bool
+	DatePartMapping             map[string]string
+	ValidIntervalUnits          map[string]bool
+	SupportsUserDefinedTypes    bool
+	SupportsFixedSizeArrays     bool
+	SupportsLimitAll            bool
+	IntervalSpans               bool
+	NormalizeFunctions          string
+	DefaultFunctionsColumnNames map[exp.Kind][]string
+	AliasPostTablesample        bool
+	AliasPostVersion            bool
+	UnnestColumnOnly            bool
+	IndexOffset                 int
 }
 
 func Base() *Dialect {
@@ -205,4 +206,17 @@ func (d *Dialect) NormalizeIdentifier(e exp.Expression) exp.Expression {
 		}
 	}
 	return e
+}
+
+func (d *Dialect) GenerateValuesAliases(values exp.Expression) []exp.Expression {
+	expressions := values.Expressions()
+	if len(expressions) == 0 || expressions[0] == nil {
+		return nil
+	}
+	columns := expressions[0].Expressions()
+	aliases := make([]exp.Expression, 0, len(columns))
+	for i := range columns {
+		aliases = append(aliases, exp.ToIdentifier(fmt.Sprintf("_col_%d", i)))
+	}
+	return aliases
 }

@@ -1017,6 +1017,9 @@ func (p *Parser) parseIs(this exp.Expression) exp.Expression {
 }
 
 func (p *Parser) parseIn(this exp.Expression, alias bool) exp.Expression {
+	if unnest := p.parseUnnest(false); unnest != nil {
+		return p.expression(exp.In(exp.Args{"this": this, "unnest": unnest}), nil, nil)
+	}
 	if p.match(tokens.L_PAREN) {
 		expressions := p.parseCsv(func() exp.Expression { return p.parseSelectOrExpression(alias) })
 		if len(expressions) == 1 && expressions[0] != nil && expressions[0].Is(exp.TraitQuery) {

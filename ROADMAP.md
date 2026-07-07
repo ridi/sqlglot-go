@@ -47,11 +47,20 @@ Slices (ordered; each must land `go test ./...` green before the next):
    needed (zero refs from schema/datatypes). UDF machinery deferred (probe/tests don't use it).
    A nested dict {table:{col:type}} → MappingSchema → column_names/get_column_type verified.
 
-4. OPTIMIZER PASSES — in probe order:
-   qualify_tables → normalize_identifiers → isolate_table_selects → qualify_columns
-   (which always runs annotate_types + quote_identifiers) → annotate_types → resolver →
-   scope (traverse_scope + Scope API) → simplify → canonicalize/normalize → qualify (driver).
-   Port tests/fixtures/optimizer/*.sql per pass.
+4. OPTIMIZER PASSES — split into 4a/4b so each lands green:
+   - 4a: DONE (branch sjcho/sqlglot-go/scope; 103 tests green). New optimizer/ package:
+     scope.py (Scope + ScopeType + build_scope + traverse_scope + walk_in_scope +
+     find_all_in_scope; sources/selected_sources/cte_sources/external_columns/columns/
+     is_union/union_scopes/subquery_scopes/... with lazy caching), plus the pre-passes
+     qualify_tables, normalize_identifiers, isolate_table_selects. traverse_scope verified on
+     JOIN/UNION/CTE/correlated-subquery. Ported scope + qualify_tables/normalize_identifiers/
+     isolate_table_selects fixtures.
+   - 4b: qualify_columns (always runs annotate_types + quote_identifiers) → annotate_types →
+     resolver → simplify_parens → the qualify() driver. Port qualify_columns.sql fixtures.
+     MUST also: (a) add NamedSelects KindSubquery case (TODO in core.go — qualify_columns needs
+     unfiltered subquery output names); (b) add the AST-invariant assertion (arg_key + parent
+     back-pointer, test_optimizer.py:213-217) to the optimizer fixture harness — critical now
+     that qualify_columns rewrites the tree. canonicalize/normalize deferred unless qualify needs.
 
 5. MYSQL + POSTGRES WIRING — dialects/{mysql,postgres}.py, parsers/{mysql,postgres}.py,
    typing/{mysql,postgres}.py, generator overrides. Both extend base directly (no fan-out).

@@ -46,3 +46,6 @@ func IgnoreNulls(args Args) Expression         { return newNode(KindIgnoreNulls,
 func RespectNulls(args Args) Expression        { return newNode(KindRespectNulls, args) }
 func PivotAny(args Args) Expression            { return newNode(KindPivotAny, args) }
 func PivotAlias(args Args) Expression          { return newNode(KindPivotAlias, args) }
+func JoinHint(args Args) Expression            { return newNode(KindJoinHint, args) }
+func TableColumn(args Args) Expression         { return newNode(KindTableColumn, args) }
+func Final(args Args) Expression               { return newNode(KindFinal, args) }

@@ -173,6 +173,9 @@ const (
 	KindAddMonths
 	KindDateAdd
 	KindDateDiff
+	KindJoinHint
+	KindTableColumn
+	KindFinal
 )
 
 type Trait uint32
@@ -186,6 +189,11 @@ const (
 	TraitAggFunc
 	TraitUnary
 	TraitQuery
+	TraitDDL
+	TraitDML
+	TraitUDTF
+	TraitDerivedTable
+	TraitSetOperation
 )
 
 type argSpec struct {
@@ -397,6 +405,9 @@ var argTypes = map[Kind][]argSpec{
 	KindAddMonths:           {{"this", true}, {"expression", true}, {"preserve_end_of_month", false}},
 	KindDateAdd:             {{"this", true}, {"expression", true}, {"unit", false}},
 	KindDateDiff:            {{"this", true}, {"expression", true}, {"unit", false}, {"zone", false}, {"big_int", false}, {"date_part_boundary", false}},
+	KindJoinHint:            {{"this", true}, {"expressions", true}},
+	KindTableColumn:         defaultArgTypes,
+	KindFinal:               defaultArgTypes,
 }
 
 var traitsOf = map[Kind]Trait{
@@ -433,10 +444,10 @@ var traitsOf = map[Kind]Trait{
 	KindNeg:                TraitCondition | TraitUnary,
 	KindNot:                TraitCondition | TraitUnary,
 	KindSelect:             TraitQuery,
-	KindUnion:              TraitQuery,
-	KindExcept:             TraitQuery,
-	KindIntersect:          TraitQuery,
-	KindSubquery:           TraitQuery,
+	KindUnion:              TraitQuery | TraitSetOperation,
+	KindExcept:             TraitQuery | TraitSetOperation,
+	KindIntersect:          TraitQuery | TraitSetOperation,
+	KindSubquery:           TraitQuery | TraitDerivedTable,
 	KindNullSafeNEQ:        TraitCondition | TraitBinary | TraitPredicate,
 	KindCase:               TraitCondition | TraitFunc,
 	KindIf:                 TraitCondition | TraitFunc,
@@ -483,7 +494,7 @@ var traitsOf = map[Kind]Trait{
 	KindCeil:               TraitCondition | TraitFunc,
 	KindFloor:              TraitCondition | TraitFunc,
 	KindArray:              TraitCondition | TraitFunc,
-	KindUnnest:             TraitCondition | TraitFunc,
+	KindUnnest:             TraitCondition | TraitFunc | TraitUDTF | TraitDerivedTable,
 	KindBracket:            TraitCondition,
 	KindGroupConcat:        TraitCondition | TraitFunc | TraitAggFunc,
 	KindJSONExtract:        TraitCondition | TraitBinary | TraitFunc,
@@ -509,6 +520,14 @@ var traitsOf = map[Kind]Trait{
 	KindAddMonths:          TraitCondition | TraitFunc,
 	KindDateAdd:            TraitCondition | TraitFunc,
 	KindDateDiff:           TraitCondition | TraitFunc,
+	KindCreate:             TraitDDL,
+	KindInsert:             TraitDDL | TraitDML,
+	KindUpdate:             TraitDML,
+	KindDelete:             TraitDML,
+	KindMerge:              TraitDML,
+	KindCTE:                TraitDerivedTable,
+	KindLateral:            TraitUDTF | TraitDerivedTable,
+	KindValues:             TraitUDTF | TraitDerivedTable,
 }
 
 var primitive = map[Kind]bool{
@@ -694,6 +713,9 @@ var className = map[Kind]string{
 	KindAddMonths:           "AddMonths",
 	KindDateAdd:             "DateAdd",
 	KindDateDiff:            "DateDiff",
+	KindJoinHint:            "JoinHint",
+	KindTableColumn:         "TableColumn",
+	KindFinal:               "Final",
 }
 
 // varLenArgs is the authoritative is_var_len_args=True set (mirroring the upstream Func

@@ -54,6 +54,7 @@ type Expression interface {
 	ParentSelect() Expression
 	Root() Expression
 	Walk(bfs ...bool) []Expression
+	WalkWithPrune(bfs bool, prune func(Expression) bool) []Expression
 	Copy() Expression
 	Replace(Expression) Expression
 	Pop() Expression
@@ -66,6 +67,11 @@ type Expression interface {
 	IsNumber() bool
 	IsInt() bool
 	IsStar() bool
+	Unnest() Expression
+	Unwrap() Expression
+	SameParent() bool
+	AliasColumnNames() []string
+	NamedSelects() []string
 	ToPy() any
 	Parts() []Expression
 	TableName() string
@@ -532,6 +538,42 @@ func (n *Node) Walk(bfsOpt ...bool) []Expression {
 	return n.dfs()
 }
 
+func (n *Node) WalkWithPrune(bfs bool, prune func(Expression) bool) []Expression {
+	if bfs {
+		queue := []Expression{n}
+		out := []Expression{}
+		for len(queue) > 0 {
+			node := queue[0]
+			queue = queue[1:]
+			out = append(out, node)
+			if prune != nil && prune(node) {
+				continue
+			}
+			if nn, ok := node.(*Node); ok {
+				queue = append(queue, nn.iterExpressions(false)...)
+			}
+		}
+		return out
+	}
+
+	stack := []Expression{n}
+	out := []Expression{}
+	for len(stack) > 0 {
+		node := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+		out = append(out, node)
+		if prune != nil && prune(node) {
+			continue
+		}
+		if nn, ok := node.(*Node); ok {
+			for _, child := range nn.iterExpressions(true) {
+				stack = append(stack, child)
+			}
+		}
+	}
+	return out
+}
+
 func (n *Node) dfs() []Expression {
 	stack := []Expression{n}
 	out := []Expression{}
@@ -772,7 +814,107 @@ func (n *Node) IsInt() bool {
 }
 
 func (n *Node) IsStar() bool {
-	return n.kind == KindStar || (n.kind == KindColumn && n.This() != nil && n.This().Kind() == KindStar)
+	switch n.kind {
+	case KindStar:
+		return true
+	case KindColumn:
+		return n.This() != nil && n.This().Kind() == KindStar
+	case KindDot:
+		return n.Expr() != nil && n.Expr().IsStar()
+	}
+	return false
+}
+
+func (n *Node) Unnest() Expression {
+	var expr Expression = n
+	if n.kind == KindSubquery {
+		for expr != nil && expr.Kind() == KindSubquery {
+			next := expr.This()
+			if next == nil {
+				break
+			}
+			expr = next
+		}
+		return expr
+	}
+	for expr != nil && expr.Kind() == KindParen {
+		next := expr.This()
+		if next == nil {
+			break
+		}
+		expr = next
+	}
+	return expr
+}
+
+func (n *Node) Unwrap() Expression {
+	var expr Expression = n
+	for expr != nil && expr.SameParent() && IsWrapper(expr) {
+		expr = expr.Parent()
+	}
+	return expr
+}
+
+func (n *Node) SameParent() bool {
+	return n.parent != nil && n.parent.Kind() == n.kind
+}
+
+func (n *Node) AliasColumnNames() []string {
+	alias := asExpression(n.args["alias"])
+	aliasNode, ok := alias.(*Node)
+	if !ok || aliasNode == nil {
+		return nil
+	}
+	columns := aliasNode.ExpressionsFor("columns")
+	out := make([]string, 0, len(columns))
+	for _, column := range columns {
+		out = append(out, column.Name())
+	}
+	return out
+}
+
+func (n *Node) NamedSelects() []string {
+	// TODO(slice4b): add a KindSubquery case — upstream Subquery.named_selects returns the
+	// inner query's UNFILTERED output_names (_named_selects via DerivedTable.selects), which
+	// differs from Select.named_selects (filtered + Aliases-expanded). Unobservable in slice
+	// 4a's Scope surface, but qualify_columns resolves columns through subqueries via this.
+	switch n.kind {
+	case KindSelect:
+		var out []string
+		for _, e := range n.Expressions() {
+			if e.AliasOrName() != "" {
+				out = append(out, e.OutputName())
+			} else if e.Kind() == KindAliases {
+				if aliases, ok := e.(*Node); ok {
+					for _, alias := range aliases.ExpressionsFor("expressions") {
+						out = append(out, alias.Name())
+					}
+				}
+			}
+		}
+		return out
+	case KindUnion, KindExcept, KindIntersect:
+		// Mirror SetOperation.named_selects (query.py:1050): unnest down to the
+		// leftmost query, then return _named_selects (query.py:90) — the unfiltered
+		// output_name of every projection, with no Aliases expansion. This differs
+		// from Select.named_selects, which filters unnamed projections and expands
+		// Aliases.
+		var expr Expression = n
+		for expr != nil && expr.Is(TraitSetOperation) {
+			expr = expr.This()
+			if expr != nil {
+				expr = expr.Unnest()
+			}
+		}
+		if expr != nil {
+			out := make([]string, 0, len(expr.Expressions()))
+			for _, e := range expr.Expressions() {
+				out = append(out, e.OutputName())
+			}
+			return out
+		}
+	}
+	return nil
 }
 
 func (n *Node) ToPy() any {
