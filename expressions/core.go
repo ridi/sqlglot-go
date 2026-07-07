@@ -368,7 +368,7 @@ func (n *Node) AliasOrName() string {
 
 func (n *Node) OutputName() string {
 	switch n.kind {
-	case KindColumn, KindLiteral, KindIdentifier, KindStar, KindDot:
+	case KindColumn, KindLiteral, KindIdentifier, KindStar, KindDot, KindTableColumn:
 		return n.Name()
 	case KindAlias:
 		return n.Alias()

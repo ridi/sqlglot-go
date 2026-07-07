@@ -1,0 +1,130 @@
+package dialects
+
+import "github.com/sjincho/sqlglot-go/tokens"
+
+func MySQL() *Dialect {
+	d := Base()
+	d.Name = "mysql"
+	d.QuoteStart = "'"
+	d.QuoteEnd = "'"
+	d.IdentifierStart = "`"
+	d.IdentifierEnd = "`"
+	d.NormalizationStrategy = CaseSensitive
+	d.DPipeIsStringConcat = false
+	d.SupportsUserDefinedTypes = false
+	d.SafeDivision = true
+
+	for _, unit := range []string{
+		"SECOND_MICROSECOND",
+		"MINUTE_MICROSECOND",
+		"MINUTE_SECOND",
+		"HOUR_MICROSECOND",
+		"HOUR_SECOND",
+		"HOUR_MINUTE",
+		"DAY_MICROSECOND",
+		"DAY_SECOND",
+		"DAY_MINUTE",
+		"DAY_HOUR",
+		"YEAR_MONTH",
+	} {
+		d.ValidIntervalUnits[unit] = true
+	}
+
+	cfg := tokens.BaseConfig()
+	cfg.Quotes["\""] = "\""
+	cfg.Identifiers = map[rune]string{'`': "`"}
+	cfg.Comments["#"] = ""
+	cfg.StringEscapes['"'] = true
+	cfg.StringEscapes['\\'] = true
+	for _, r := range []rune{'0', 'b', 'n', 'r', 't', 'Z', '%', '_'} {
+		cfg.EscapeFollowChars[r] = true
+	}
+	cfg.HasBitStrings = true
+	cfg.HasHexStrings = true
+	cfg.FormatStrings["b'"] = tokens.FormatString{End: "'", TokenType: tokens.BIT_STRING}
+	cfg.FormatStrings["B'"] = tokens.FormatString{End: "'", TokenType: tokens.BIT_STRING}
+	cfg.FormatStrings["x'"] = tokens.FormatString{End: "'", TokenType: tokens.HEX_STRING}
+	cfg.FormatStrings["X'"] = tokens.FormatString{End: "'", TokenType: tokens.HEX_STRING}
+	cfg.NestedComments = false
+	cfg.IdentifiersCanStartWithDigit = true
+
+	for keyword, tokenType := range map[string]tokens.TokenType{
+		"BLOB":             tokens.BLOB,
+		"CHARSET":          tokens.CHARACTER_SET,
+		"DISTINCTROW":      tokens.DISTINCT,
+		"EXPLAIN":          tokens.DESCRIBE,
+		"FORCE":            tokens.FORCE,
+		"IGNORE":           tokens.IGNORE,
+		"KEY":              tokens.KEY,
+		"LOCK TABLES":      tokens.COMMAND,
+		"LONGBLOB":         tokens.LONGBLOB,
+		"LONGTEXT":         tokens.LONGTEXT,
+		"MEDIUMBLOB":       tokens.MEDIUMBLOB,
+		"MEDIUMINT":        tokens.MEDIUMINT,
+		"MEDIUMTEXT":       tokens.MEDIUMTEXT,
+		"MEMBER OF":        tokens.MEMBER_OF,
+		"MOD":              tokens.MOD,
+		"SEPARATOR":        tokens.SEPARATOR,
+		"SERIAL":           tokens.SERIAL,
+		"SIGNED":           tokens.BIGINT,
+		"SIGNED INTEGER":   tokens.BIGINT,
+		"SOUNDS LIKE":      tokens.SOUNDS_LIKE,
+		"START":            tokens.BEGIN,
+		"TIMESTAMP":        tokens.TIMESTAMPTZ,
+		"TINYBLOB":         tokens.TINYBLOB,
+		"TINYTEXT":         tokens.TINYTEXT,
+		"UNLOCK TABLES":    tokens.COMMAND,
+		"UNSIGNED":         tokens.UBIGINT,
+		"UNSIGNED INTEGER": tokens.UBIGINT,
+		"YEAR":             tokens.YEAR,
+		"_ARMSCII8":        tokens.INTRODUCER,
+		"_ASCII":           tokens.INTRODUCER,
+		"_BIG5":            tokens.INTRODUCER,
+		"_BINARY":          tokens.INTRODUCER,
+		"_CP1250":          tokens.INTRODUCER,
+		"_CP1251":          tokens.INTRODUCER,
+		"_CP1256":          tokens.INTRODUCER,
+		"_CP1257":          tokens.INTRODUCER,
+		"_CP850":           tokens.INTRODUCER,
+		"_CP852":           tokens.INTRODUCER,
+		"_CP866":           tokens.INTRODUCER,
+		"_CP932":           tokens.INTRODUCER,
+		"_DEC8":            tokens.INTRODUCER,
+		"_EUCJPMS":         tokens.INTRODUCER,
+		"_EUCKR":           tokens.INTRODUCER,
+		"_GB18030":         tokens.INTRODUCER,
+		"_GB2312":          tokens.INTRODUCER,
+		"_GBK":             tokens.INTRODUCER,
+		"_GEOSTD8":         tokens.INTRODUCER,
+		"_GREEK":           tokens.INTRODUCER,
+		"_HEBREW":          tokens.INTRODUCER,
+		"_HP8":             tokens.INTRODUCER,
+		"_KEYBCS2":         tokens.INTRODUCER,
+		"_KOI8R":           tokens.INTRODUCER,
+		"_KOI8U":           tokens.INTRODUCER,
+		"_LATIN1":          tokens.INTRODUCER,
+		"_LATIN2":          tokens.INTRODUCER,
+		"_LATIN5":          tokens.INTRODUCER,
+		"_LATIN7":          tokens.INTRODUCER,
+		"_MACCE":           tokens.INTRODUCER,
+		"_MACROMAN":        tokens.INTRODUCER,
+		"_SJIS":            tokens.INTRODUCER,
+		"_SWE7":            tokens.INTRODUCER,
+		"_TIS620":          tokens.INTRODUCER,
+		"_UCS2":            tokens.INTRODUCER,
+		"_UJIS":            tokens.INTRODUCER,
+		"_UTF8":            tokens.INTRODUCER,
+		"_UTF16":           tokens.INTRODUCER,
+		"_UTF16LE":         tokens.INTRODUCER,
+		"_UTF32":           tokens.INTRODUCER,
+		"_UTF8MB3":         tokens.INTRODUCER,
+		"_UTF8MB4":         tokens.INTRODUCER,
+		"@@":               tokens.SESSION_PARAMETER,
+	} {
+		cfg.Keywords[keyword] = tokenType
+	}
+	cfg.Commands[tokens.REPLACE] = true
+	delete(cfg.Commands, tokens.SHOW)
+	d.TokenizerConfig = tokens.CompileConfig(cfg)
+	return d
+}

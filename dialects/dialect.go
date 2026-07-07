@@ -20,6 +20,11 @@ const (
 )
 
 type Dialect struct {
+	Name                               string
+	QuoteStart                         string
+	QuoteEnd                           string
+	IdentifierStart                    string
+	IdentifierEnd                      string
 	TokenizerConfig                    tokens.TokenizerConfig
 	NormalizationStrategy              NormalizationStrategy
 	DPipeIsStringConcat                bool
@@ -61,6 +66,11 @@ type Dialect struct {
 func Base() *Dialect {
 	datePartMapping := baseDatePartMapping()
 	return &Dialect{
+		Name:                     "base",
+		QuoteStart:               "'",
+		QuoteEnd:                 "'",
+		IdentifierStart:          "\"",
+		IdentifierEnd:            "\"",
 		TokenizerConfig:          tokens.BaseConfig(),
 		NormalizationStrategy:    Lowercase,
 		DPipeIsStringConcat:      true,
@@ -196,9 +206,10 @@ func GetOrRaise(name string) (*Dialect, error) {
 	switch strings.ToLower(name) {
 	case "", "base":
 		return Base(), nil
-	case "mysql", "postgres":
-		// TODO(slice 5): wire real MySQL and Postgres dialect behavior.
-		return Base(), nil
+	case "mysql":
+		return MySQL(), nil
+	case "postgres":
+		return Postgres(), nil
 	default:
 		return nil, fmt.Errorf("unknown dialect %q", name)
 	}

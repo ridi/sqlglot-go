@@ -120,17 +120,15 @@ func New(d *dialects.Dialect, o Options) *Generator {
 }
 
 func identifierDelimiters(d *dialects.Dialect) (string, string) {
-	// TODO(slice 5): support dialects with multiple identifier delimiter pairs deterministically.
-	for start, end := range d.TokenizerConfig.Identifiers {
-		return string(start), end
+	if d.IdentifierStart != "" {
+		return d.IdentifierStart, d.IdentifierEnd
 	}
 	return "\"", "\""
 }
 
 func quoteDelimiters(d *dialects.Dialect) (string, string) {
-	// TODO(slice 5): support dialects with multiple quote delimiter pairs deterministically.
-	for start, end := range d.TokenizerConfig.Quotes {
-		return start, end
+	if d.QuoteStart != "" {
+		return d.QuoteStart, d.QuoteEnd
 	}
 	return "'", "'"
 }

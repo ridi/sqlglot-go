@@ -47,6 +47,7 @@ func init() {
 		expressions.KindFrom:                (*Generator).fromSQL,
 		expressions.KindJoin:                (*Generator).joinSQL,
 		expressions.KindTable:               (*Generator).tableSQL,
+		expressions.KindTableColumn:         (*Generator).tableColumnSQL,
 		expressions.KindTableAlias:          (*Generator).tableAliasSQL,
 		expressions.KindWhere:               (*Generator).whereSQL,
 		expressions.KindGroup:               (*Generator).groupSQL,

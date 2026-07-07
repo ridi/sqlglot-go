@@ -488,13 +488,17 @@ func (c *TokenizerCore) scanNumber() {
 func (c *TokenizerCore) scanBits() {
 	c.advance(1, false)
 	value := c.extractValue()
-	if _, ok := parseIntBase(value, 2); ok {
-		runes := []rune(value)
-		if len(runes) >= 2 {
-			c.add(BIT_STRING, string(runes[2:]))
-		} else {
-			c.add(BIT_STRING, "")
-		}
+	runes := []rune(value)
+	payload := ""
+	if len(runes) >= 2 {
+		payload = string(runes[2:])
+	}
+	// Upstream validates the full value (e.g. int("0b101", 2)); Python's int()
+	// accepts the "0b" prefix for base 2 but requires at least one digit after it,
+	// so a bare "0b" falls back to an identifier. We validate the payload and reject
+	// an empty one to preserve that behavior (parseIntBase("") returns ok on an empty loop).
+	if _, ok := parseIntBase(payload, 2); ok && payload != "" {
+		c.add(BIT_STRING, payload)
 	} else {
 		c.add(IDENTIFIER)
 	}
@@ -503,13 +507,15 @@ func (c *TokenizerCore) scanBits() {
 func (c *TokenizerCore) scanHex() {
 	c.advance(1, false)
 	value := c.extractValue()
-	if _, ok := parseIntBase(value, 16); ok {
-		runes := []rune(value)
-		if len(runes) >= 2 {
-			c.add(HEX_STRING, string(runes[2:]))
-		} else {
-			c.add(HEX_STRING, "")
-		}
+	runes := []rune(value)
+	payload := ""
+	if len(runes) >= 2 {
+		payload = string(runes[2:])
+	}
+	// See _scanBits: validate the payload, rejecting an empty one so a bare "0x"
+	// falls back to an identifier, matching upstream int("0x", 16) raising ValueError.
+	if _, ok := parseIntBase(payload, 16); ok && payload != "" {
+		c.add(HEX_STRING, payload)
 	} else {
 		c.add(IDENTIFIER)
 	}

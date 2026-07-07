@@ -98,7 +98,7 @@ func TestQualifyTablesFixtures(t *testing.T) {
 
 func deferredQualifyTablesFixture(pair sqlFixturePair) string {
 	if pair.Meta["dialect"] == "postgres" {
-		return "postgres function table-source parser/dialect behavior is slice 5"
+		return "postgres function table-source needs GENERATE_SERIES/JSONB_TO_RECORDSET FUNCTIONS override — slice 5b"
 	}
 	switch pair.Meta["title"] {
 	case "nested joins":

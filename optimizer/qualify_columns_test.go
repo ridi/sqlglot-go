@@ -158,9 +158,6 @@ func expectOptimizeOrSchemaError(t *testing.T, fn func()) (recovered any) {
 }
 
 func deferredQualifyColumnsFixture(pair sqlFixturePair) string {
-	if pair.Meta["dialect"] == "mysql" || pair.Meta["dialect"] == "postgres" {
-		return "dialect wiring is slice 5"
-	}
 	upperSQL := strings.ToUpper(pair.SQL)
 	if strings.Contains(upperSQL, "LATERAL VIEW") || strings.Contains(upperSQL, "UNNEST(") || strings.Contains(upperSQL, "EXPLODE(") {
 		return "UDTF/UNNEST resolver path is slice 4c"

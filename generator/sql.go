@@ -1602,6 +1602,8 @@ func (g *Generator) tableParts(e expressions.Expression) string {
 	return strings.Join(parts, ".")
 }
 
+func (g *Generator) tableColumnSQL(e expressions.Expression) string { return g.sqlKey(e, "this") }
+
 func (g *Generator) tableSQL(e expressions.Expression) string {
 	table := g.tableParts(e)
 	only := ""

@@ -69,10 +69,21 @@ Slices (ordered; each must land `go test ./...` green before the next):
      machinery only for annotate_types.sql test fidelity, after probe e2e. Also deferred:
      canonicalize/normalize (not on qualify's path).
 
-5. MYSQL + POSTGRES WIRING — dialects/{mysql,postgres}.py, parsers/{mysql,postgres}.py,
-   typing/{mysql,postgres}.py, generator overrides. Both extend base directly (no fan-out).
-   TODO carried from slice 3: move HSTORE from the base tokenizer KEYWORDS (tokens/tokenizer.go)
-   into the Postgres tokenizer override — upstream defines it only in Postgres (postgres.py:92).
+5. MYSQL + POSTGRES WIRING — DONE (branch sjcho/sqlglot-go/dialects; 114 tests green).
+   GetOrRaise("mysql"/"postgres") return real *Dialect values: per-dialect TokenizerConfig
+   (MySQL backtick identifiers + # comments + backslash/bit/hex + keyword remaps; Postgres $$
+   dollar-quotes + HSTORE [moved here from base per slice-3 TODO] + keyword/op deltas),
+   NormalizationStrategy (MySQL = CASE_SENSITIVE per mysql.py:25 — NOT case-insensitive;
+   Postgres = LOWERCASE), and dialect quoting (MySQL ` / Postgres "). VERIFIED end-to-end:
+   parse → qualify → traverse_scope runs under BOTH dialects with correct identifier
+   normalization (postgres lowercases unquoted; mysql keeps case) + dialect-correct quoting.
+   Ported curated same-dialect validate_identity round-trips from test_mysql/test_postgres.
+   - 5b (DEFERRED, not probe-critical): per-dialect parser FUNCTIONS ↔ generator TRANSFORMS/
+     TYPE_MAPPING override tables (function + type-name remaps must land paired to avoid
+     round-trip regressions; the base tables are package-global singletons). Includes MySQL
+     ||/&&/XOR logical operators (DPipeIsStringConcat=false currently errors — safer than
+     misparse), MySQL CAST(x AS TIMESTAMP/BLOB) round-trip, and the cross-dialect
+     transpilation test cases (need the other 32 dialects — out of M1 scope).
 
 6. PROBE END-TO-END — jsonpath, serde, lineage bits probe touches; run probe.py’s path
    (parse → qualify → traverse_scope) against real queries; parity vs Python sqlglot 30.12.0.
