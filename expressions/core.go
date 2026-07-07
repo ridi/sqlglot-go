@@ -314,7 +314,7 @@ func (n *Node) Name() string {
 		if expr := n.Expr(); expr != nil {
 			return expr.Name()
 		}
-	case KindFrom:
+	case KindFrom, KindOrdered:
 		if this := n.This(); this != nil {
 			return this.Name()
 		}
@@ -347,6 +347,8 @@ func (n *Node) OutputName() string {
 		if this := n.This(); this != nil {
 			return this.Name()
 		}
+	case KindSubquery:
+		return n.Alias()
 	}
 	return ""
 }
@@ -706,7 +708,8 @@ func (n *Node) ErrorMessages(args []any) []string {
 		}
 	}
 	var messages []string
-	for _, spec := range argTypesFor(n.kind) {
+	argTypes := argTypesFor(n.kind)
+	for _, spec := range argTypes {
 		if !spec.Required {
 			continue
 		}
@@ -714,6 +717,14 @@ func (n *Node) ErrorMessages(args []any) []string {
 		if value == nil || isEmptyList(value) {
 			messages = append(messages, fmt.Sprintf("Required keyword: '%s' missing for %s", spec.Key, className[n.kind]))
 		}
+	}
+	// Upstream error_messages (core.py:1320) rejects a Func given more positional args
+	// than it has arg_types, unless it is var-len. `args` is the raw list passed to the
+	// function builder (validate_expression); nil means the caller opted out of the check.
+	if len(args) > len(argTypes) && n.Is(TraitFunc) && !varLenArgs[n.kind] {
+		messages = append(messages, fmt.Sprintf(
+			"The number of provided arguments (%d) is greater than the maximum number of supported arguments (%d)",
+			len(args), len(argTypes)))
 	}
 	return messages
 }
@@ -1120,6 +1131,13 @@ func Is(args Args) Expression          { return newNode(KindIs, args) }
 func Like(args Args) Expression        { return newNode(KindLike, args) }
 func ILike(args Args) Expression       { return newNode(KindILike, args) }
 func In(args Args) Expression          { return newNode(KindIn, args) }
+func Case(args Args) Expression        { return newNode(KindCase, args) }
+func If(args Args) Expression          { return newNode(KindIf, args) }
+func Exists(args Args) Expression      { return newNode(KindExists, args) }
+func Any(args Args) Expression         { return newNode(KindAny, args) }
+func All(args Args) Expression         { return newNode(KindAll, args) }
+func NullSafeNEQ(args Args) Expression { return newNode(KindNullSafeNEQ, args) }
+func Anonymous(args Args) Expression   { return newNode(KindAnonymous, args) }
 func Hint(args Args) Expression        { return newNode(KindHint, args) }
 func Placeholder(args Args) Expression { return newNode(KindPlaceholder, args) }
 

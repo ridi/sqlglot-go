@@ -12,10 +12,17 @@ Slices (ordered; each must land `go test ./...` green before the next):
    (Node model + core/query nodes needed for SELECT), minimal SELECT parser, base Dialect.
    Tests: test_tokens.py (all but test_jinja), subset of test_expressions.py/test_parser.py.
 
-1. PARSER CORE — full parser.py: statements, functions & FUNCTION_BY_NAME registry,
-   types/casts (::), CASE, subqueries, UNION/set-ops, CTE/WITH, ORDER/GROUP/HAVING/LIMIT/
-   QUALIFY/WINDOW, bracket/array, intervals, DDL enough for probe. Un-skip most of
-   test_parser.py + test_expressions.py (find/walk/column/text/eq full).
+1. PARSER CORE — split into 1a/1b so each lands green:
+   - 1a: DONE (committed on branch sjcho/sqlglot-go/parser-core; 52 tests green). Grammar
+     green, function long-tail + CAST deferred. Includes set operations,
+     Subquery/derived tables/scalar subqueries, CTE/WITH, GROUP/HAVING/ORDER/LIMIT/
+     OFFSET/FETCH/QUALIFY/DISTINCT/WINDOW/FILTER, predicates (IN/EXISTS/ANY/ALL/
+     BETWEEN/IS DISTINCT FROM), CASE/IF/Paren/Tuple, function-call dispatch,
+     FUNCTION_BY_NAME, Anonymous fallback, and a curated common-function set.
+   - 1b: CAST/`::`/DataType coordination, specialized FUNCTION_PARSERS, bracket
+     literals/indexing, INTERVAL, LATERAL/UNNEST/VALUES/PIVOT, window extras,
+     LOCK/FOR and remaining clauses, SELECT TOP, parse_into, DML/DDL/statements,
+     and the long function tail.
 
 2. GENERATOR CORE — generator.py: Generator + generate(); un-skip .sql()-dependent tests;
    enables tests/fixtures/identity.sql round-trips (test_transpile subset). Required by
@@ -56,6 +63,14 @@ non-blocking for the foundation, must be resolved by the noted slice):
 - deferred-feature parse divergences (expected, un-skip as features land): adjacent string
   literals `'a' 'b'` parse as Alias, not Concat (slice 1); `/*+ HINT */` errors instead of
   being ignored (slice 1); int64 overflow in ToPy/IsInt (latent until slice 4).
+- Slice 1a intentionally drops `_parse_table`'s fast path so subquery detection runs before
+  table-part parsing. This is a pure optimization divergence; revisit if parser profiling
+  shows it matters.
+- `IsWrapper` uses the Go AST's `truthy` helper rather than Python's `v is None` check because
+  `newNode` does not store nil args. The wrapper semantics are equivalent for stored args.
+- CAST / `::` / DataType remain deferred to parser-core 1b and schema/DataType slice 3. A
+  throwaway mini-DataType would create reconciliation debt; keep `test_cast` skipped until the
+  real type model lands.
 
 Resolved in the foundation review pass (were latent, now fixed + regression-tested):
 - Replace()/Pop() silently no-op'd on single-value (non-list) args — the core tree-rewrite
@@ -63,3 +78,8 @@ Resolved in the foundation review pass (were latent, now fixed + regression-test
   index<0 through Set, the index-nil path). Tests: TestReplaceSingleValueArg, TestPopSingleValueArg.
 - _parse_alias built an invalid exp.Tuple{this:...} (Tuple has no `this` arg) → ArgError.
   Added exp.Aliases (this+expressions) and use it. Test: TestParseAliases.
+
+Resolved in the slice-1a review pass:
+- parseLimit dropped upstream's `isinstance(expression, exp.Mod)` retreat (parser.py:5576-5579),
+  so `LIMIT 10 % 3` built Mod(10,3) instead of erroring on the trailing operand. Restored the
+  retreat in parser/parser.go parseLimit. Test: TestLimitPercentModRetreat.

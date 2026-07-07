@@ -15,12 +15,15 @@ type Dialect struct {
 	SafeDivision            bool
 	SupportsColumnJoinMarks bool
 	ColonIsVariantExtract   bool
+	NullOrdering            string
+	SupportsOrderByAll      bool
 }
 
 func Base() *Dialect {
 	return &Dialect{
 		TokenizerConfig:     tokens.BaseConfig(),
 		DPipeIsStringConcat: true,
+		NullOrdering:        "nulls_are_small",
 	}
 }
 

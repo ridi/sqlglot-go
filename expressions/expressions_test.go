@@ -75,8 +75,29 @@ func TestEqTrimmed(t *testing.T) {
 	}
 }
 
-func TestFindAllSubqueriesSkipped(t *testing.T) {
-	t.Skip("TODO(slice1): needs subquery/JOIN parsing")
+func TestFindAllSubqueries(t *testing.T) {
+	expression := parseOne(t, `
+		SELECT *
+		FROM (
+			SELECT b.*
+			FROM a.b b
+		) x
+		JOIN (
+		  SELECT c.foo
+		  FROM a.c c
+		  WHERE foo = 1
+		) y
+		  ON x.c = y.foo
+		CROSS JOIN (
+		  SELECT *
+		  FROM (
+			SELECT d.bar
+			FROM d
+		  ) nested
+		) z
+		  ON x.c = y.foo
+	`)
+	assertNames(t, expression.FindAll(exp.KindTable), []string{"b", "c", "d"})
 }
 
 func TestFindAll(t *testing.T) {

@@ -170,6 +170,78 @@ func wrap(expression Expression, trait Trait) Expression {
 	return expression
 }
 
+func SupportsArg(kind Kind, key string) bool { return supportsArg(kind, key) }
+
+func IsWrapper(e Expression) bool {
+	n, ok := e.(*Node)
+	if !ok || n.kind != KindSubquery {
+		return false
+	}
+	// newNode doesn't store nil args, so truthy matches upstream's "v is not None" wrapper check.
+	for _, key := range n.argOrder {
+		if key != "this" && truthy(n.args[key]) {
+			return false
+		}
+	}
+	return true
+}
+
+// ColumnsToDot mirrors the transform in _parse_column_ops (parser.py:6796-6799):
+//
+//	this.transform(lambda n: n.to_dot(include_dots=False) if isinstance(n, exp.Column) else n)
+//
+// Every Column descendant (not just the root) is rewritten to its dot form via
+// Column.to_dot(include_dots=False): a Dot chain of the column's ordered parts, or the
+// single part when there is only one. It returns a transformed copy; the input is unmodified.
+func ColumnsToDot(root Expression) Expression {
+	if root == nil {
+		return nil
+	}
+	return transformColumnsToDot(root.Copy())
+}
+
+func transformColumnsToDot(node Expression) Expression {
+	n, ok := node.(*Node)
+	if !ok {
+		return node
+	}
+	// Post-order (children before self), matching Expression.transform's bottom-up walk.
+	for _, key := range append([]string(nil), n.argOrder...) {
+		switch v := n.args[key].(type) {
+		case Expression:
+			if rewritten := transformColumnsToDot(v); rewritten != v {
+				n.Set(key, rewritten)
+			}
+		case []Expression:
+			for i, child := range v {
+				if rewritten := transformColumnsToDot(child); rewritten != child {
+					n.SetAt(key, rewritten, i, true)
+				}
+			}
+		}
+	}
+	if n.kind == KindColumn {
+		return columnPartsToDot(n)
+	}
+	return n
+}
+
+func columnPartsToDot(col *Node) Expression {
+	parts := col.Parts()
+	switch len(parts) {
+	case 0:
+		return col
+	case 1:
+		return parts[0]
+	default:
+		copies := make([]Expression, len(parts))
+		for i, part := range parts {
+			copies[i] = part.Copy()
+		}
+		return DotBuild(copies)
+	}
+}
+
 func supportsArg(kind Kind, key string) bool {
 	for _, spec := range argTypesFor(kind) {
 		if spec.Key == key {

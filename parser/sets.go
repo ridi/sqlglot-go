@@ -260,6 +260,12 @@ var idVarTokens = map[tokens.TokenType]bool{
 	tokens.EXPORT:                  true,
 }
 
+// tableAliasTokens mirrors upstream TABLE_ALIAS_TOKENS (parser.py:771), i.e.
+// ID_VAR_TOKENS minus {ANTI, ASOF, FULL, LEFT, LOCK, NATURAL, RIGHT, SEMI, WINDOW}.
+// LIMIT and OFFSET are intentionally retained (they ARE in ID_VAR_TOKENS,
+// parser.py:714/721): a well-formed trailing LIMIT/OFFSET is caught earlier by
+// canParseLimitOrOffset, so only a malformed dangling LIMIT/OFFSET (with no
+// operand) aliases the table here — which is exactly upstream's behavior.
 var tableAliasTokens = map[tokens.TokenType]bool{
 	tokens.SESSION:                 true,
 	tokens.SESSION_USER:            true,
@@ -768,6 +774,269 @@ var aliasTokens = map[tokens.TokenType]bool{
 }
 
 var identifierTokens = map[tokens.TokenType]bool{tokens.VAR: true, tokens.IDENTIFIER: true}
+
+var setOperationTokens = map[tokens.TokenType]bool{tokens.UNION: true, tokens.INTERSECT: true, tokens.EXCEPT: true}
+var distinctTokens = map[tokens.TokenType]bool{tokens.DISTINCT: true}
+var ambiguousAliasTokens = map[tokens.TokenType]bool{tokens.LIMIT: true, tokens.OFFSET: true}
+var subqueryTokens = map[tokens.TokenType]bool{tokens.SELECT: true, tokens.WITH: true, tokens.FROM: true}
+var recursiveCteSearchKind = map[string]bool{"BREADTH": true, "DEPTH": true, "CYCLE": true}
+var windowSides = map[string]bool{"FOLLOWING": true, "PRECEDING": true}
+
+var columnFastBailTokens = map[tokens.TokenType]bool{
+	tokens.DOT:         true,
+	tokens.DOTCOLON:    true,
+	tokens.DCOLON:      true,
+	tokens.ARROW:       true,
+	tokens.DARROW:      true,
+	tokens.HASH_ARROW:  true,
+	tokens.DHASH_ARROW: true,
+	tokens.PLACEHOLDER: true,
+	tokens.L_PAREN:     true,
+	tokens.L_BRACKET:   true,
+	tokens.L_BRACE:     true,
+	tokens.COLON:       true,
+	tokens.JOIN_MARKER: true,
+}
+
+var funcTokens = buildFuncTokens()
+var queryModifierTokens = map[tokens.TokenType]bool{
+	tokens.WHERE:    true,
+	tokens.GROUP_BY: true,
+	tokens.HAVING:   true,
+	tokens.QUALIFY:  true,
+	tokens.WINDOW:   true,
+	tokens.ORDER_BY: true,
+	tokens.LIMIT:    true,
+	tokens.FETCH:    true,
+	tokens.OFFSET:   true,
+}
+var windowAliasTokens = buildWindowAliasTokens()
+var fetchTokens = buildFetchTokens()
+
+// typeTokens is a minimal port of parser.py:469 TYPE_TOKENS (the union of TYPE_TOKENS
+// plus STRUCT/NESTED/ENUM/AGGREGATE type-token subsets at parser.py:440-467). Full type
+// parsing / the DType enum is deferred to slice 3; this set exists only so buildFuncTokens
+// can seed FUNC_TOKENS from TYPE_TOKENS (not the much larger ID_VAR_TOKENS), matching
+// upstream FUNC_TOKENS = {explicit} + TYPE_TOKENS + SUBQUERY_PREDICATES (parser.py:825-874).
+var typeTokens = map[tokens.TokenType]bool{
+	tokens.BIT:               true,
+	tokens.BOOLEAN:           true,
+	tokens.TINYINT:           true,
+	tokens.UTINYINT:          true,
+	tokens.SMALLINT:          true,
+	tokens.USMALLINT:         true,
+	tokens.INT:               true,
+	tokens.UINT:              true,
+	tokens.BIGINT:            true,
+	tokens.UBIGINT:           true,
+	tokens.BIGNUM:            true,
+	tokens.INT128:            true,
+	tokens.UINT128:           true,
+	tokens.INT256:            true,
+	tokens.UINT256:           true,
+	tokens.MEDIUMINT:         true,
+	tokens.UMEDIUMINT:        true,
+	tokens.FIXEDSTRING:       true,
+	tokens.FLOAT:             true,
+	tokens.DOUBLE:            true,
+	tokens.UDOUBLE:           true,
+	tokens.CHAR:              true,
+	tokens.NCHAR:             true,
+	tokens.VARCHAR:           true,
+	tokens.NVARCHAR:          true,
+	tokens.BPCHAR:            true,
+	tokens.TEXT:              true,
+	tokens.MEDIUMTEXT:        true,
+	tokens.LONGTEXT:          true,
+	tokens.BLOB:              true,
+	tokens.MEDIUMBLOB:        true,
+	tokens.LONGBLOB:          true,
+	tokens.BINARY:            true,
+	tokens.VARBINARY:         true,
+	tokens.JSON:              true,
+	tokens.JSONB:             true,
+	tokens.INTERVAL:          true,
+	tokens.TINYBLOB:          true,
+	tokens.TINYTEXT:          true,
+	tokens.TIME:              true,
+	tokens.TIMETZ:            true,
+	tokens.TIME_NS:           true,
+	tokens.TIMESTAMP:         true,
+	tokens.TIMESTAMP_S:       true,
+	tokens.TIMESTAMP_MS:      true,
+	tokens.TIMESTAMP_NS:      true,
+	tokens.TIMESTAMPTZ:       true,
+	tokens.TIMESTAMPLTZ:      true,
+	tokens.TIMESTAMPNTZ:      true,
+	tokens.DATETIME:          true,
+	tokens.DATETIME2:         true,
+	tokens.DATETIME64:        true,
+	tokens.SMALLDATETIME:     true,
+	tokens.DATE:              true,
+	tokens.DATE32:            true,
+	tokens.INT4RANGE:         true,
+	tokens.INT4MULTIRANGE:    true,
+	tokens.INT8RANGE:         true,
+	tokens.INT8MULTIRANGE:    true,
+	tokens.NUMRANGE:          true,
+	tokens.NUMMULTIRANGE:     true,
+	tokens.TSRANGE:           true,
+	tokens.TSMULTIRANGE:      true,
+	tokens.TSTZRANGE:         true,
+	tokens.TSTZMULTIRANGE:    true,
+	tokens.DATERANGE:         true,
+	tokens.DATEMULTIRANGE:    true,
+	tokens.DECIMAL:           true,
+	tokens.DECIMAL32:         true,
+	tokens.DECIMAL64:         true,
+	tokens.DECIMAL128:        true,
+	tokens.DECIMAL256:        true,
+	tokens.DECFLOAT:          true,
+	tokens.UDECIMAL:          true,
+	tokens.BIGDECIMAL:        true,
+	tokens.UUID:              true,
+	tokens.GEOGRAPHY:         true,
+	tokens.GEOGRAPHYPOINT:    true,
+	tokens.GEOMETRY:          true,
+	tokens.POINT:             true,
+	tokens.RING:              true,
+	tokens.LINESTRING:        true,
+	tokens.MULTILINESTRING:   true,
+	tokens.POLYGON:           true,
+	tokens.MULTIPOLYGON:      true,
+	tokens.HLLSKETCH:         true,
+	tokens.HSTORE:            true,
+	tokens.PSEUDO_TYPE:       true,
+	tokens.SUPER:             true,
+	tokens.SERIAL:            true,
+	tokens.SMALLSERIAL:       true,
+	tokens.BIGSERIAL:         true,
+	tokens.XML:               true,
+	tokens.YEAR:              true,
+	tokens.USERDEFINED:       true,
+	tokens.MONEY:             true,
+	tokens.SMALLMONEY:        true,
+	tokens.ROWVERSION:        true,
+	tokens.IMAGE:             true,
+	tokens.VARIANT:           true,
+	tokens.VECTOR:            true,
+	tokens.VOID:              true,
+	tokens.OBJECT:            true,
+	tokens.OBJECT_IDENTIFIER: true,
+	tokens.INET:              true,
+	tokens.IPADDRESS:         true,
+	tokens.IPPREFIX:          true,
+	tokens.IPV4:              true,
+	tokens.IPV6:              true,
+	tokens.UNKNOWN:           true,
+	tokens.NOTHING:           true,
+	tokens.NULL:              true,
+	tokens.NAME:              true,
+	tokens.TDIGEST:           true,
+	tokens.DYNAMIC:           true,
+	// ENUM_TYPE_TOKENS (parser.py:457)
+	tokens.ENUM:   true,
+	tokens.ENUM8:  true,
+	tokens.ENUM16: true,
+	// NESTED_TYPE_TOKENS (parser.py:447) + STRUCT_TYPE_TOKENS (parser.py:440)
+	tokens.ARRAY:          true,
+	tokens.LIST:           true,
+	tokens.LOWCARDINALITY: true,
+	tokens.MAP:            true,
+	tokens.NULLABLE:       true,
+	tokens.RANGE:          true,
+	tokens.NESTED:         true,
+	tokens.STRUCT:         true,
+	tokens.UNION:          true,
+	// AGGREGATE_TYPE_TOKENS (parser.py:464)
+	tokens.AGGREGATEFUNCTION:       true,
+	tokens.SIMPLEAGGREGATEFUNCTION: true,
+}
+
+func buildFuncTokens() map[tokens.TokenType]bool {
+	m := map[tokens.TokenType]bool{
+		tokens.COLLATE:           true,
+		tokens.COMMAND:           true,
+		tokens.CURRENT_DATE:      true,
+		tokens.CURRENT_DATETIME:  true,
+		tokens.CURRENT_SCHEMA:    true,
+		tokens.CURRENT_TIMESTAMP: true,
+		tokens.CURRENT_TIME:      true,
+		tokens.CURRENT_USER:      true,
+		tokens.CURRENT_CATALOG:   true,
+		tokens.FILTER:            true,
+		tokens.FIRST:             true,
+		tokens.FORMAT:            true,
+		tokens.GET:               true,
+		tokens.GLOB:              true,
+		tokens.IDENTIFIER:        true,
+		tokens.INDEX:             true,
+		tokens.ISNULL:            true,
+		tokens.ILIKE:             true,
+		tokens.INSERT:            true,
+		tokens.LIKE:              true,
+		tokens.LOCALTIME:         true,
+		tokens.LOCALTIMESTAMP:    true,
+		tokens.MERGE:             true,
+		tokens.NEXT:              true,
+		tokens.OFFSET:            true,
+		tokens.PRIMARY_KEY:       true,
+		tokens.RANGE:             true,
+		tokens.REPLACE:           true,
+		tokens.RLIKE:             true,
+		tokens.ROW:               true,
+		tokens.SESSION_USER:      true,
+		tokens.UNNEST:            true,
+		tokens.VAR:               true,
+		tokens.LEFT:              true,
+		tokens.RIGHT:             true,
+		tokens.SEQUENCE:          true,
+		tokens.DATE:              true,
+		tokens.DATETIME:          true,
+		tokens.TABLE:             true,
+		tokens.TIMESTAMP:         true,
+		tokens.TIMESTAMPTZ:       true,
+		tokens.TRUNCATE:          true,
+		tokens.UTC_DATE:          true,
+		tokens.UTC_TIME:          true,
+		tokens.UTC_TIMESTAMP:     true,
+		tokens.WINDOW:            true,
+		tokens.XOR:               true,
+		tokens.ANY:               true,
+		tokens.ALL:               true,
+		tokens.EXISTS:            true,
+		tokens.SOME:              true,
+	}
+	// Upstream: FUNC_TOKENS = {explicit} | TYPE_TOKENS | SUBQUERY_PREDICATES
+	// (parser.py:825-874). TYPE_TOKENS is a narrow subset of ID_VAR_TOKENS, so seeding
+	// from typeTokens (not idVarTokens) keeps non-type keywords like DEFAULT/UPDATE/VIEW
+	// out of the non-any_token function gate (parser.go:_parse_function_call).
+	for tt := range typeTokens {
+		m[tt] = true
+	}
+	return m
+}
+
+func buildWindowAliasTokens() map[tokens.TokenType]bool {
+	m := map[tokens.TokenType]bool{}
+	for tt := range idVarTokens {
+		m[tt] = true
+	}
+	delete(m, tokens.RANGE)
+	delete(m, tokens.ROWS)
+	return m
+}
+
+func buildFetchTokens() map[tokens.TokenType]bool {
+	m := map[tokens.TokenType]bool{}
+	for tt := range idVarTokens {
+		m[tt] = true
+	}
+	delete(m, tokens.ROW)
+	delete(m, tokens.ROWS)
+	delete(m, tokens.PERCENT)
+	return m
+}
 
 // reservedTokens mirrors parser.py:613 RESERVED_TOKENS:
 //
