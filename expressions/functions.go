@@ -27,6 +27,9 @@ func FromArgList(kind Kind, args []Expression) Expression {
 }
 
 var FunctionByName = map[string]func([]Expression) Expression{
+	"ARRAY": func(args []Expression) Expression {
+		return newNode(KindArray, Args{"expressions": args})
+	},
 	"ABS":                   genericFunction(KindAbs),
 	"AVG":                   genericFunction(KindAvg),
 	"SUM":                   genericFunction(KindSum),
@@ -62,6 +65,32 @@ var FunctionByName = map[string]func([]Expression) Expression{
 	"COUNT_IF":              genericFunction(KindCountIf),
 	"COUNTIF":               genericFunction(KindCountIf),
 	"QUANTILE":              genericFunction(KindQuantile),
+	"ARRAY_AGG":             genericFunction(KindArrayAgg),
+	"ARRAY_SIZE":            genericFunction(KindArraySize),
+	"ARRAY_LENGTH":          genericFunction(KindArraySize),
+	"ARRAY_CONTAINS":        genericFunction(KindArrayContains),
+	"ARRAY_HAS":             genericFunction(KindArrayContains),
+	"INITCAP":               genericFunction(KindInitcap),
+	"SPLIT":                 genericFunction(KindSplit),
+	"REGEXP_LIKE":           genericFunction(KindRegexpLike),
+	"RLIKE":                 genericFunction(KindRegexpLike),
+	"REGEXP_SPLIT":          genericFunction(KindRegexpSplit),
+	"STRUCT_EXTRACT":        genericFunction(KindStructExtract),
+	"STANDARD_HASH":         genericFunction(KindStandardHash),
+	"HEX":                   genericFunction(KindHex),
+	"MD5":                   genericFunction(KindMD5),
+	"ST_POINT":              genericFunction(KindStPoint),
+	"ST_MAKEPOINT":          genericFunction(KindStPoint),
+	"ST_DISTANCE":           genericFunction(KindStDistance),
+	"GENERATE_SERIES":       genericFunction(KindGenerateSeries),
+	"DATE":                  genericFunction(KindDate),
+	"ADD_MONTHS":            genericFunction(KindAddMonths),
+	"DATE_ADD":              genericFunction(KindDateAdd),
+	"DATEADD":               genericFunction(KindDateAdd),
+	"DATEDIFF":              genericFunction(KindDateDiff),
+	"DATE_DIFF":             genericFunction(KindDateDiff),
+	"JSON_EXTRACT":          jsonExtractFunction(KindJSONExtract),
+	"JSON_EXTRACT_SCALAR":   jsonExtractFunction(KindJSONExtractScalar),
 	"COUNT": func(args []Expression) Expression {
 		m := Args{"big_int": true}
 		if len(args) > 0 {
@@ -101,6 +130,22 @@ var FunctionByName = map[string]func([]Expression) Expression{
 
 func genericFunction(kind Kind) func([]Expression) Expression {
 	return func(args []Expression) Expression { return FromArgList(kind, args) }
+}
+
+func jsonExtractFunction(kind Kind) func([]Expression) Expression {
+	return func(args []Expression) Expression {
+		m := Args{}
+		if len(args) > 0 {
+			m["this"] = args[0]
+		}
+		if len(args) > 1 {
+			m["expression"] = args[1]
+		}
+		if len(args) > 2 {
+			m["expressions"] = args[2:]
+		}
+		return newNode(kind, m)
+	}
 }
 
 func coalesceFunction() func([]Expression) Expression {
@@ -154,3 +199,21 @@ func Trim(args Args) Expression           { return newNode(KindTrim, args) }
 func Ceil(args Args) Expression           { return newNode(KindCeil, args) }
 func Floor(args Args) Expression          { return newNode(KindFloor, args) }
 func GroupConcat(args Args) Expression    { return newNode(KindGroupConcat, args) }
+func ArrayAgg(args Args) Expression       { return newNode(KindArrayAgg, args) }
+func ArraySize(args Args) Expression      { return newNode(KindArraySize, args) }
+func ArrayContains(args Args) Expression  { return newNode(KindArrayContains, args) }
+func Initcap(args Args) Expression        { return newNode(KindInitcap, args) }
+func Split(args Args) Expression          { return newNode(KindSplit, args) }
+func RegexpLike(args Args) Expression     { return newNode(KindRegexpLike, args) }
+func RegexpSplit(args Args) Expression    { return newNode(KindRegexpSplit, args) }
+func StructExtract(args Args) Expression  { return newNode(KindStructExtract, args) }
+func StandardHash(args Args) Expression   { return newNode(KindStandardHash, args) }
+func Hex(args Args) Expression            { return newNode(KindHex, args) }
+func MD5(args Args) Expression            { return newNode(KindMD5, args) }
+func StPoint(args Args) Expression        { return newNode(KindStPoint, args) }
+func StDistance(args Args) Expression     { return newNode(KindStDistance, args) }
+func GenerateSeries(args Args) Expression { return newNode(KindGenerateSeries, args) }
+func Date(args Args) Expression           { return newNode(KindDate, args) }
+func AddMonths(args Args) Expression      { return newNode(KindAddMonths, args) }
+func DateAdd(args Args) Expression        { return newNode(KindDateAdd, args) }
+func DateDiff(args Args) Expression       { return newNode(KindDateDiff, args) }

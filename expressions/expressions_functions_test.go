@@ -7,7 +7,7 @@ import (
 )
 
 func TestRegisteredFunctions(t *testing.T) {
-	// Remaining test_functions entries are deferred to slice 1c (long-tail functions and generator-dependent assertions).
+	// Remaining test_functions entries are deferred to 1d+ (dialect-gated/custom builders, statements, and long-tail functions).
 	cases := []struct {
 		sql  string
 		kind exp.Kind
@@ -61,6 +61,33 @@ func TestRegisteredFunctions(t *testing.T) {
 		{"STRING_AGG(a, ',')", exp.KindGroupConcat},
 		{"GROUP_CONCAT(a, ',')", exp.KindGroupConcat},
 		{"LISTAGG(a, ',')", exp.KindGroupConcat},
+		{"ARRAY(a)", exp.KindArray},
+		{"ARRAY_AGG(a)", exp.KindArrayAgg},
+		{"ARRAY_SIZE(a)", exp.KindArraySize},
+		{"ARRAY_LENGTH(a)", exp.KindArraySize},
+		{"ARRAY_CONTAINS(a, b)", exp.KindArrayContains},
+		{"ARRAY_HAS(a, b)", exp.KindArrayContains},
+		{"INITCAP(a)", exp.KindInitcap},
+		{"SPLIT(a, b)", exp.KindSplit},
+		{"REGEXP_LIKE(a, b)", exp.KindRegexpLike},
+		{"RLIKE(a, b)", exp.KindRegexpLike},
+		{"REGEXP_SPLIT(a, b)", exp.KindRegexpSplit},
+		{"STRUCT_EXTRACT(a, b)", exp.KindStructExtract},
+		{"STANDARD_HASH(a)", exp.KindStandardHash},
+		{"HEX(a)", exp.KindHex},
+		{"MD5(a)", exp.KindMD5},
+		{"ST_POINT(a, b)", exp.KindStPoint},
+		{"ST_MAKEPOINT(a, b)", exp.KindStPoint},
+		{"ST_DISTANCE(a, b)", exp.KindStDistance},
+		{"GENERATE_SERIES(1, 3)", exp.KindGenerateSeries},
+		{"DATE(a)", exp.KindDate},
+		{"ADD_MONTHS(a, b)", exp.KindAddMonths},
+		{"DATE_ADD(a, b)", exp.KindDateAdd},
+		{"DATEADD(a, b)", exp.KindDateAdd},
+		{"DATEDIFF(a, b)", exp.KindDateDiff},
+		{"DATE_DIFF(a, b)", exp.KindDateDiff},
+		{"JSON_EXTRACT(a, '$.b')", exp.KindJSONExtract},
+		{"JSON_EXTRACT_SCALAR(a, '$.b')", exp.KindJSONExtractScalar},
 	}
 	for _, tc := range cases {
 		expression := parseOne(t, tc.sql)

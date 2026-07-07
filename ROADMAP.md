@@ -22,10 +22,15 @@ Slices (ordered; each must land `go test ./...` green before the next):
    - 1b: DONE when green. Landed DML/DDL statement roots, minimal CREATE/Command,
      CAST/`::`/DataType coordination, specialized FUNCTION_PARSERS, bracket
      literals/indexing, LATERAL/UNNEST/VALUES/PIVOT, and the M1 root probes.
-   - 1c: defer LOCK/FOR, window extras (WITHIN GROUP / IGNORE-RESPECT NULLS /
-     frame EXCLUDE), INTERVAL and nested/UDT type parsing, SELECT TOP, parse_into,
-     JSON column operators, simplified top-level PIVOT, CREATE properties/indexes/
-     clone/sequence details, constraints, and the remaining long function tail.
+   - 1c: DONE (committed on branch; 73 tests green). Landed LOCK/FOR, CLUSTER/DISTRIBUTE/
+     SORT BY, PREWHERE, window extras (WITHIN GROUP / IGNORE-RESPECT NULLS / frame EXCLUDE),
+     full parseTypes (nested/UDT/parameterized/MAP/STRUCT/ARRAY/enum/NULLABLE/COLLATE),
+     INTERVAL literals, full PIVOT/UNPIVOT (Any/Alias), JSON column operators
+     (-> ->> #> #>> → JSONExtract*/JSONBExtract*), SELECT TOP wiring, and a function batch.
+   - 1d: defer CREATE detail (properties, column + table CONSTRAINT_PARSERS, indexes,
+     clone/sequence/materialized), remaining STATEMENT_PARSERS + parse_into(into=),
+     CONNECT BY / START WITH, angle-bracket inline STRUCT constructor, and the remaining
+     long function tail. (None probe-critical; probe's KNOWN_ROOTS already parse.)
 
 2. GENERATOR CORE — generator.py: Generator + generate(); un-skip .sql()-dependent tests;
    enables tests/fixtures/identity.sql round-trips (test_transpile subset). Required by
@@ -81,6 +86,11 @@ Resolved in the foundation review pass (were latent, now fixed + regression-test
   index<0 through Set, the index-nil path). Tests: TestReplaceSingleValueArg, TestPopSingleValueArg.
 - _parse_alias built an invalid exp.Tuple{this:...} (Tuple has no `this` arg) → ArgError.
   Added exp.Aliases (this+expressions) and use it. Test: TestParseAliases.
+
+Resolved in the slice-1c review pass:
+- parseWindow parsed the frame EXCLUDE option with raise_unmatched=false; upstream
+  _parse_window (parser.py:8405) uses the default True, so a malformed EXCLUDE option must
+  raise "Unknown option". Fixed in parser/parser.go. Test: TestWindowExtras (malformed case).
 
 Slice-1b review disposition:
 - Reviewer flagged parseValue ignoring its `values` param, claiming upstream has an

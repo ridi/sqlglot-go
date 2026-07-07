@@ -85,3 +85,37 @@ func TestParseApplyFunctionAlias(t *testing.T) {
 		}
 	}
 }
+
+func TestPivotAnyAlias(t *testing.T) {
+	root := parseOne(t, "SELECT * FROM t PIVOT (SUM(x) FOR y IN (ANY ORDER BY y))")
+	pivot := root.Find(exp.KindPivot)
+	if pivot == nil {
+		t.Fatalf("missing pivot:\n%s", root.ToS())
+	}
+	fields := expressionsForArg(pivot, "fields")
+	if len(fields) != 1 || len(fields[0].Expressions()) != 1 || fields[0].Expressions()[0].Kind() != exp.KindPivotAny {
+		t.Fatalf("PivotAny mismatch:\n%s", pivot.ToS())
+	}
+
+	root = parseOne(t, "SELECT * FROM t PIVOT (SUM(x) FOR y IN (1 AS one, 2 AS two))")
+	pivot = root.Find(exp.KindPivot)
+	fields = expressionsForArg(pivot, "fields")
+	if len(fields) != 1 || len(fields[0].Expressions()) != 2 || fields[0].Expressions()[0].Kind() != exp.KindPivotAlias {
+		t.Fatalf("PivotAlias mismatch:\n%s", pivot.ToS())
+	}
+}
+
+func TestUnpivotTargets(t *testing.T) {
+	root := parseOne(t, "SELECT * FROM t UNPIVOT (v FOR k IN (a, b))")
+	pivot := root.Find(exp.KindPivot)
+	if pivot == nil || pivot.Arg("unpivot") != true {
+		t.Fatalf("missing unpivot:\n%s", root.ToS())
+	}
+	if len(pivot.Expressions()) != 1 || pivot.Expressions()[0].Kind() != exp.KindIdentifier {
+		t.Fatalf("unpivot value target mismatch:\n%s", pivot.ToS())
+	}
+	fields := expressionsForArg(pivot, "fields")
+	if len(fields) != 1 || fields[0].This() == nil || fields[0].This().Kind() != exp.KindIdentifier {
+		t.Fatalf("unpivot FOR target mismatch:\n%s", pivot.ToS())
+	}
+}

@@ -100,7 +100,9 @@ func (p *Parser) parseColumnDef(this exp.Expression) exp.Expression {
 	if this != nil && this.Kind() == exp.KindColumn {
 		this = this.This()
 	}
-	kind := p.parseTypes()
+	// schema=true mirrors upstream _parse_column_def (parser.py:7255): it enables the
+	// fixed-size-array form (e.g. `col INT[3]`) in column definitions.
+	kind := p.parseTypes(false, true, true, false)
 	constraints := []exp.Expression{}
 	for {
 		constraint := p.parseColumnConstraint()

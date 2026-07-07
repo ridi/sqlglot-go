@@ -36,3 +36,13 @@ func Lateral(args Args) Expression             { return newNode(KindLateral, arg
 func Pivot(args Args) Expression               { return newNode(KindPivot, args) }
 func Values(args Args) Expression              { return newNode(KindValues, args) }
 func ColumnDef(args Args) Expression           { return newNode(KindColumnDef, args) }
+func Lock(args Args) Expression                { return newNode(KindLock, args) }
+func PreWhere(args Args) Expression            { return newNode(KindPreWhere, args) }
+func Cluster(args Args) Expression             { return newNode(KindCluster, args) }
+func Distribute(args Args) Expression          { return newNode(KindDistribute, args) }
+func Sort(args Args) Expression                { return newNode(KindSort, args) }
+func WithinGroup(args Args) Expression         { return newNode(KindWithinGroup, args) }
+func IgnoreNulls(args Args) Expression         { return newNode(KindIgnoreNulls, args) }
+func RespectNulls(args Args) Expression        { return newNode(KindRespectNulls, args) }
+func PivotAny(args Args) Expression            { return newNode(KindPivotAny, args) }
+func PivotAlias(args Args) Expression          { return newNode(KindPivotAlias, args) }

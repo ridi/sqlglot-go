@@ -800,15 +800,21 @@ var columnFastBailTokens = map[tokens.TokenType]bool{
 
 var funcTokens = buildFuncTokens()
 var queryModifierTokens = map[tokens.TokenType]bool{
-	tokens.WHERE:    true,
-	tokens.GROUP_BY: true,
-	tokens.HAVING:   true,
-	tokens.QUALIFY:  true,
-	tokens.WINDOW:   true,
-	tokens.ORDER_BY: true,
-	tokens.LIMIT:    true,
-	tokens.FETCH:    true,
-	tokens.OFFSET:   true,
+	tokens.WHERE:         true,
+	tokens.GROUP_BY:      true,
+	tokens.HAVING:        true,
+	tokens.QUALIFY:       true,
+	tokens.WINDOW:        true,
+	tokens.ORDER_BY:      true,
+	tokens.LIMIT:         true,
+	tokens.FETCH:         true,
+	tokens.OFFSET:        true,
+	tokens.FOR:           true,
+	tokens.LOCK:          true,
+	tokens.CLUSTER_BY:    true,
+	tokens.DISTRIBUTE_BY: true,
+	tokens.SORT_BY:       true,
+	tokens.PREWHERE:      true,
 }
 var windowAliasTokens = buildWindowAliasTokens()
 var fetchTokens = buildFetchTokens()
@@ -953,6 +959,62 @@ var typeTokens = map[tokens.TokenType]bool{
 	tokens.SIMPLEAGGREGATEFUNCTION: true,
 }
 
+var structTypeTokens = map[tokens.TokenType]bool{
+	tokens.NESTED: true,
+	tokens.OBJECT: true,
+	tokens.STRUCT: true,
+	tokens.UNION:  true,
+}
+
+var nestedTypeTokens = map[tokens.TokenType]bool{
+	tokens.ARRAY:          true,
+	tokens.LIST:           true,
+	tokens.LOWCARDINALITY: true,
+	tokens.MAP:            true,
+	tokens.NULLABLE:       true,
+	tokens.RANGE:          true,
+	tokens.NESTED:         true,
+	tokens.OBJECT:         true,
+	tokens.STRUCT:         true,
+	tokens.UNION:          true,
+}
+
+var enumTypeTokens = map[tokens.TokenType]bool{
+	tokens.DYNAMIC: true,
+	tokens.ENUM:    true,
+	tokens.ENUM8:   true,
+	tokens.ENUM16:  true,
+}
+
+var aggregateTypeTokens = map[tokens.TokenType]bool{
+	tokens.AGGREGATEFUNCTION:       true,
+	tokens.SIMPLEAGGREGATEFUNCTION: true,
+}
+
+var timesTokens = map[tokens.TokenType]bool{
+	tokens.TIME:   true,
+	tokens.TIMETZ: true,
+}
+
+var timestampsTokens = map[tokens.TokenType]bool{
+	tokens.TIMESTAMP:    true,
+	tokens.TIMESTAMPNTZ: true,
+	tokens.TIMESTAMPTZ:  true,
+	tokens.TIMESTAMPLTZ: true,
+	tokens.TIME:         true,
+	tokens.TIMETZ:       true,
+}
+
+var signedToUnsigned = map[tokens.TokenType]tokens.TokenType{
+	tokens.BIGINT:    tokens.UBIGINT,
+	tokens.INT:       tokens.UINT,
+	tokens.MEDIUMINT: tokens.UMEDIUMINT,
+	tokens.SMALLINT:  tokens.USMALLINT,
+	tokens.TINYINT:   tokens.UTINYINT,
+	tokens.DECIMAL:   tokens.UDECIMAL,
+	tokens.DOUBLE:    tokens.UDOUBLE,
+}
+
 // dbCreatables mirrors parser.py:618 DB_CREATABLES.
 var dbCreatables = map[tokens.TokenType]bool{
 	tokens.DATABASE:            true,
@@ -1004,6 +1066,13 @@ var conflictActions = optionsType{
 var castActions = optionsType{
 	"RENAME": {{"FIELDS"}},
 	"ADD":    {{"FIELDS"}},
+}
+
+var windowExcludeOptions = optionsType{
+	"NO":      {{"OTHERS"}},
+	"CURRENT": {{"ROW"}},
+	"GROUP":   nil,
+	"TIES":    nil,
 }
 
 var trimTypes = map[string]bool{"LEADING": true, "TRAILING": true, "BOTH": true}

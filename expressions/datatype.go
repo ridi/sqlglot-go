@@ -275,3 +275,5 @@ func IsType(e Expression, t DType) bool {
 
 func DataType(args Args) Expression      { return newNode(KindDataType, args) }
 func DataTypeParam(args Args) Expression { return newNode(KindDataTypeParam, args) }
+func Interval(args Args) Expression      { return newNode(KindInterval, args) }
+func IntervalSpan(args Args) Expression  { return newNode(KindIntervalSpan, args) }

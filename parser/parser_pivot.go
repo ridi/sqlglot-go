@@ -172,6 +172,18 @@ func (p *Parser) parsePivot() exp.Expression {
 	group := p.parseGroup(false)
 	p.matchRParen(nil)
 	pivot := p.expression(exp.Pivot(exp.Args{"expressions": expressions, "fields": fields, "unpivot": unpivot, "include_nulls": includeNulls, "default_on_null": defaultOnNull, "group": group}), nil, nil)
+	if unpivot {
+		for i, expression := range expressions {
+			expressions[i] = unpivotTarget(expression)
+		}
+		pivot.Set("expressions", expressions)
+		for _, field := range fields {
+			if field != nil && field.Kind() == exp.KindIn {
+				field.Set("this", unpivotTarget(asExpr(field.Arg("this"))))
+			}
+		}
+	}
+	// TODO(slice 2): PIVOT column-name inference needs generator SQL output.
 	if !p.matchSet(map[tokens.TokenType]bool{tokens.PIVOT: true, tokens.UNPIVOT: true}, false) {
 		pivot.Set("alias", p.parseTableAlias(nil))
 	}
@@ -195,9 +207,44 @@ func (p *Parser) parsePivotIn() exp.Expression {
 		p.raiseError("Expecting IN")
 	}
 	if p.match(tokens.L_PAREN) {
-		exprs := p.parseCsv(func() exp.Expression { return p.parseSelectOrExpression(false) })
+		var exprs []exp.Expression
+		if p.match(tokens.ANY) {
+			exprs = []exp.Expression{p.expression(exp.PivotAny(exp.Args{"this": p.parseOrder(nil, false)}), nil, nil)}
+		} else {
+			exprs = p.parseCsv(p.parseAliasedPivotExpression)
+		}
 		p.matchRParen(nil)
 		return p.expression(exp.In(exp.Args{"this": value, "expressions": exprs}), nil, nil)
 	}
 	return p.expression(exp.In(exp.Args{"this": value, "field": p.parseIdVar(false, nil)}), nil, nil)
+}
+
+func (p *Parser) parseAliasedPivotExpression() exp.Expression {
+	this := p.parseSelectOrExpression(false)
+	p.match(tokens.ALIAS)
+	alias := p.parseBitwise()
+	if alias != nil {
+		if alias.Kind() == exp.KindColumn && alias.Arg("db") == nil {
+			alias = alias.This()
+		}
+		return p.expression(exp.PivotAlias(exp.Args{"this": this, "alias": alias}), nil, nil)
+	}
+	return this
+}
+
+func unpivotTarget(expression exp.Expression) exp.Expression {
+	if expression == nil {
+		return nil
+	}
+	if expression.Kind() == exp.KindColumn && expression.Arg("table") == nil {
+		return expression.This()
+	}
+	if expression.Kind() == exp.KindTuple {
+		expressions := expression.Expressions()
+		for i, child := range expressions {
+			expressions[i] = unpivotTarget(child)
+		}
+		expression.Set("expressions", expressions)
+	}
+	return expression
 }

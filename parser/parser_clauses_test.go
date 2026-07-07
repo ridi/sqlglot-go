@@ -114,6 +114,82 @@ func TestWindowAndFilterClauses(t *testing.T) {
 	}
 }
 
+func TestLocks(t *testing.T) {
+	cases := []struct {
+		sql    string
+		update bool
+		key    any
+		wait   any
+		ofLen  int
+	}{
+		{"SELECT * FROM t FOR UPDATE", true, nil, nil, 0},
+		{"SELECT * FROM t FOR SHARE", false, nil, nil, 0},
+		{"SELECT * FROM t LOCK IN SHARE MODE", false, nil, nil, 0},
+		{"SELECT * FROM t FOR NO KEY UPDATE OF a NOWAIT", true, true, true, 1},
+	}
+	for _, tc := range cases {
+		expression := parseOne(t, tc.sql)
+		locks := expressionsForArg(expression, "locks")
+		if len(locks) != 1 || locks[0].Kind() != exp.KindLock {
+			t.Fatalf("%s: locks = %#v, want one Lock:\n%s", tc.sql, locks, expression.ToS())
+		}
+		lock := locks[0]
+		if lock.Arg("update") != tc.update || lock.Arg("key") != tc.key || lock.Arg("wait") != tc.wait {
+			t.Fatalf("%s: lock args update/key/wait = %v/%v/%v, want %v/%v/%v:\n%s", tc.sql, lock.Arg("update"), lock.Arg("key"), lock.Arg("wait"), tc.update, tc.key, tc.wait, lock.ToS())
+		}
+		if got := len(expressionsForArg(lock, "expressions")); got != tc.ofLen {
+			t.Fatalf("%s: OF expressions = %d, want %d:\n%s", tc.sql, got, tc.ofLen, lock.ToS())
+		}
+	}
+}
+
+func TestClusterDistributeSort(t *testing.T) {
+	cases := []struct {
+		sql  string
+		arg  string
+		kind exp.Kind
+	}{
+		{"SELECT a FROM t CLUSTER BY x", "cluster", exp.KindCluster},
+		{"SELECT a FROM t DISTRIBUTE BY x", "distribute", exp.KindDistribute},
+		{"SELECT a FROM t SORT BY x DESC", "sort", exp.KindSort},
+	}
+	for _, tc := range cases {
+		expression := parseOne(t, tc.sql)
+		clause, ok := expression.Arg(tc.arg).(exp.Expression)
+		if !ok || clause.Kind() != tc.kind {
+			t.Fatalf("%s: %s = %#v, want %v:\n%s", tc.sql, tc.arg, expression.Arg(tc.arg), tc.kind, expression.ToS())
+		}
+	}
+}
+
+func TestWindowExtras(t *testing.T) {
+	expression := parseOne(t, "SELECT PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY x) OVER ()")
+	window := expression.Expressions()[0]
+	if window.Kind() != exp.KindWindow || window.This() == nil || window.This().Kind() != exp.KindWithinGroup {
+		t.Fatalf("WITHIN GROUP window mismatch:\n%s", expression.ToS())
+	}
+
+	expression = parseOne(t, "SELECT LAST_VALUE(x) IGNORE NULLS OVER (PARTITION BY y)")
+	window = expression.Expressions()[0]
+	if window.Kind() != exp.KindWindow || window.This() == nil || window.This().Kind() != exp.KindIgnoreNulls {
+		t.Fatalf("IGNORE NULLS window mismatch:\n%s", expression.ToS())
+	}
+
+	expression = parseOne(t, "SELECT SUM(x) OVER (ORDER BY y ROWS BETWEEN 1 PRECEDING AND CURRENT ROW EXCLUDE TIES)")
+	window = expression.Expressions()[0]
+	spec := exprArg(t, window, "spec")
+	exclude := exprArg(t, spec, "exclude")
+	if exclude.Kind() != exp.KindVar || exclude.Name() != "TIES" {
+		t.Fatalf("EXCLUDE mismatch:\n%s", spec.ToS())
+	}
+
+	// A malformed EXCLUDE option must error (upstream _parse_window uses the default
+	// raise_unmatched=True), not silently retreat.
+	if _, err := sqlglot.ParseOne("SELECT SUM(x) OVER (ORDER BY y ROWS BETWEEN 1 PRECEDING AND CURRENT ROW EXCLUDE FOOBAR)", ""); err == nil {
+		t.Fatal("malformed EXCLUDE option should raise Unknown option")
+	}
+}
+
 func TestDuplicateWhereIgnoreKeepsLast(t *testing.T) {
 	d := dialects.Base()
 	toks, err := d.NewTokenizer().Tokenize("SELECT a WHERE x = 1 WHERE y = 2")

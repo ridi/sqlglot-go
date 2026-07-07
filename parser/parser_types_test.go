@@ -85,3 +85,120 @@ func TestParseSpecialFunctions(t *testing.T) {
 		}
 	}
 }
+
+func TestNestedTypes(t *testing.T) {
+	to := exprArg(t, parseOne(t, "CAST(x AS ARRAY<INT>)"), "to")
+	if !exp.IsType(to, exp.DTypeArray) || len(to.Expressions()) != 1 || !exp.IsType(to.Expressions()[0], exp.DTypeInt) {
+		t.Fatalf("ARRAY type mismatch:\n%s", to.ToS())
+	}
+
+	to = exprArg(t, parseOne(t, "CAST(x AS STRUCT<a INT, b STRING>)"), "to")
+	if !exp.IsType(to, exp.DTypeStruct) || len(to.Expressions()) != 2 || to.Expressions()[0].Kind() != exp.KindColumnDef {
+		t.Fatalf("STRUCT type mismatch:\n%s", to.ToS())
+	}
+
+	to = exprArg(t, parseOne(t, "CAST(x AS MAP<STRING, INT>)"), "to")
+	if !exp.IsType(to, exp.DTypeMap) || len(to.Expressions()) != 2 {
+		t.Fatalf("MAP type mismatch:\n%s", to.ToS())
+	}
+
+	to = exprArg(t, parseOne(t, "CAST(x AS MAP[STRING=>INT])"), "to")
+	if !exp.IsType(to, exp.DTypeMap) || len(to.Expressions()) != 2 {
+		t.Fatalf("MAP bracket type mismatch:\n%s", to.ToS())
+	}
+
+	to = exprArg(t, parseOne(t, "CAST(x AS ARRAY<STRING COLLATE utf8>)"), "to")
+	if !exp.IsType(to, exp.DTypeArray) || len(to.Expressions()) != 1 || to.Expressions()[0].Arg("collate") == nil {
+		t.Fatalf("COLLATE nested type mismatch:\n%s", to.ToS())
+	}
+
+	to = exprArg(t, parseOne(t, "CAST(x AS INT UNSIGNED)"), "to")
+	if !exp.IsType(to, exp.DTypeUInt) {
+		t.Fatalf("UNSIGNED type mismatch:\n%s", to.ToS())
+	}
+
+	to = exprArg(t, parseOne(t, "CAST(x AS TIMESTAMP WITH TIME ZONE)"), "to")
+	if !exp.IsType(to, exp.DTypeTimestampTz) {
+		t.Fatalf("TIMESTAMP WITH TIME ZONE mismatch:\n%s", to.ToS())
+	}
+
+	to = exprArg(t, parseOne(t, "CAST(x AS INT[])"), "to")
+	if !exp.IsType(to, exp.DTypeArray) || len(to.Expressions()) != 1 || !exp.IsType(to.Expressions()[0], exp.DTypeInt) {
+		t.Fatalf("array suffix type mismatch:\n%s", to.ToS())
+	}
+
+	to = exprArg(t, parseOne(t, "CAST(x AS NULLABLE(INT))"), "to")
+	if !exp.IsType(to, exp.DTypeInt) || to.Arg("nullable") != true {
+		t.Fatalf("NULLABLE type mismatch:\n%s", to.ToS())
+	}
+
+	// Top-level CAST(... AS <type> COLLATE ...) must parse (with_collation=True),
+	// not hard-error on the COLLATE token (LOCAL fix; parser.py:7863).
+	to = exprArg(t, parseOne(t, "CAST(x AS VARCHAR COLLATE utf8)"), "to")
+	if !exp.IsType(to, exp.DTypeVarchar) || to.Arg("collate") == nil {
+		t.Fatalf("top-level COLLATE cast mismatch:\n%s", to.ToS())
+	}
+}
+
+// A fixed-size array column definition (`col INT[3]`) must parse into a structured
+// Create with an ARRAY DataType carrying values, not degrade to a Command. This
+// exercises parseTypes' schema=true path via _parse_column_def (LOCAL fix).
+func TestFixedSizeArrayColumn(t *testing.T) {
+	create := parseOne(t, "CREATE TABLE t (col INT[3])")
+	if create.Kind() != exp.KindCreate {
+		t.Fatalf("fixed-size array column should parse to Create:\n%s", create.ToS())
+	}
+	col := exprArg(t, create, "this").Expressions()[0]
+	kind := exprArg(t, col, "kind")
+	if !exp.IsType(kind, exp.DTypeArray) || len(expressionsForArg(kind, "values")) != 1 {
+		t.Fatalf("fixed-size array type mismatch:\n%s", kind.ToS())
+	}
+	if len(kind.Expressions()) != 1 || !exp.IsType(kind.Expressions()[0], exp.DTypeInt) {
+		t.Fatalf("fixed-size array element type mismatch:\n%s", kind.ToS())
+	}
+}
+
+func TestIntervalType(t *testing.T) {
+	to := exprArg(t, parseOne(t, "CAST(x AS INTERVAL DAY)"), "to")
+	interval := exprArg(t, to, "this")
+	if interval.Kind() != exp.KindInterval {
+		t.Fatalf("INTERVAL type inner kind = %v, want Interval:\n%s", interval.Kind(), to.ToS())
+	}
+	unit := exprArg(t, interval, "unit")
+	if unit.Kind() != exp.KindVar || unit.Name() != "DAY" {
+		t.Fatalf("INTERVAL unit mismatch:\n%s", interval.ToS())
+	}
+}
+
+func TestIntervalLiteral(t *testing.T) {
+	for _, sql := range []string{"INTERVAL '1' DAY", "INTERVAL 1 DAY", "INTERVAL '1 day'"} {
+		interval := parseOne(t, sql)
+		if interval.Kind() != exp.KindInterval {
+			t.Fatalf("%s: kind = %v, want Interval:\n%s", sql, interval.Kind(), interval.ToS())
+		}
+		unit := exprArg(t, interval, "unit")
+		if unit.Kind() != exp.KindVar {
+			t.Fatalf("%s: unit kind = %v, want Var:\n%s", sql, unit.Kind(), interval.ToS())
+		}
+	}
+
+	interval := parseOne(t, "INTERVAL '1' DAY TO SECOND")
+	unit := exprArg(t, interval, "unit")
+	if unit.Kind() != exp.KindIntervalSpan {
+		t.Fatalf("INTERVAL span unit kind = %v, want IntervalSpan:\n%s", unit.Kind(), interval.ToS())
+	}
+
+	// Numeric interval literals canonicalize to a string literal via Python-style str():
+	// integers drop no digits, integer-valued decimals keep ".0", and Neg keeps its sign.
+	for _, tc := range []struct{ sql, want string }{
+		{"INTERVAL 1 DAY", "1"},
+		{"INTERVAL 1.0 DAY", "1.0"},
+		{"INTERVAL 1.5 DAY", "1.5"},
+		{"INTERVAL -1 DAY", "-1"},
+	} {
+		iv := parseOne(t, tc.sql)
+		if got := exprArg(t, iv, "this").Name(); got != tc.want {
+			t.Fatalf("%s: interval value = %q, want %q:\n%s", tc.sql, got, tc.want, iv.ToS())
+		}
+	}
+}

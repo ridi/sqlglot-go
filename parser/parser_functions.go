@@ -17,9 +17,9 @@ func (p *Parser) parseConvert(strict bool, safe any) exp.Expression {
 	this := p.parseBitwise()
 	var to exp.Expression
 	if p.match(tokens.USING) {
-		// TODO(slice 1c): CONVERT charset form.
+		// TODO(1d): CONVERT charset form.
 	} else if p.match(tokens.COMMA) {
-		to = p.parseTypes()
+		to = p.parseTypes(false, false, true, false)
 	}
 	args := exp.Args{"this": this, "to": to}
 	if safe != nil {

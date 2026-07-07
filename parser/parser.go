@@ -507,8 +507,15 @@ func (p *Parser) parseSelect(opts ...bool) exp.Expression {
 		if all && distinct != nil {
 			p.raiseError("Cannot specify both ALL and DISTINCT after SELECT")
 		}
+		// SELECT TOP is dead for M1 because TOP is not a base tokenizer keyword,
+		// but wire the parser shape to match upstream.
+		top := p.parseLimit(nil, true, false)
 		projections := p.parseExpressions()
-		this = p.expression(exp.Select(exp.Args{"distinct": distinct, "expressions": projections}), nil, nil)
+		selectArgs := exp.Args{"distinct": distinct, "expressions": projections}
+		if top != nil {
+			selectArgs["limit"] = top
+		}
+		this = p.expression(exp.Select(selectArgs), nil, nil)
 		if len(comments) > 0 {
 			this.AddComments(comments, true)
 		}
@@ -790,6 +797,68 @@ func (p *Parser) parseWhere(skipWhereToken bool) exp.Expression {
 	return p.expression(exp.Where(exp.Args{"this": p.parseDisjunction()}), nil, comments)
 }
 
+func (p *Parser) parseLocks() []exp.Expression {
+	locks := []exp.Expression{}
+	for {
+		var update bool
+		var key any
+		if p.matchTextSeq("FOR", "UPDATE") {
+			update = true
+		} else if p.matchTextSeq("FOR", "SHARE") || p.matchTextSeq("LOCK", "IN", "SHARE", "MODE") {
+			update = false
+		} else if p.matchTextSeq("FOR", "KEY", "SHARE") {
+			update = false
+			key = true
+		} else if p.matchTextSeq("FOR", "NO", "KEY", "UPDATE") {
+			update = true
+			key = true
+		} else {
+			break
+		}
+
+		var expressions []exp.Expression
+		if p.matchTextSeq("OF") {
+			expressions = p.parseCsv(func() exp.Expression {
+				return p.parseTable(true, false, nil, false, false, false, false)
+			})
+		}
+
+		var wait any
+		if p.matchTextSeq("NOWAIT") {
+			wait = true
+		} else if p.matchTextSeq("WAIT") {
+			wait = p.parsePrimary()
+		} else if p.matchTextSeq("SKIP", "LOCKED") {
+			wait = false
+		}
+
+		locks = append(locks, p.expression(exp.Lock(exp.Args{"update": update, "expressions": expressions, "wait": wait, "key": key}), nil, nil))
+	}
+	return locks
+}
+
+func (p *Parser) parsePrewhere() exp.Expression {
+	if !p.match(tokens.PREWHERE) {
+		return nil
+	}
+	comments := p.prevComments
+	return p.expression(exp.PreWhere(exp.Args{"this": p.parseDisjunction()}), nil, comments)
+}
+
+func (p *Parser) parseCluster() exp.Expression {
+	if !p.match(tokens.CLUSTER_BY) {
+		return nil
+	}
+	return p.expression(exp.Cluster(exp.Args{"expressions": p.parseCsv(p.parseColumn)}), nil, nil)
+}
+
+func (p *Parser) parseSort(kind exp.Kind, tok tokens.TokenType) exp.Expression {
+	if !p.match(tok) {
+		return nil
+	}
+	return p.expression(exp.New(kind, exp.Args{"expressions": p.parseCsv(func() exp.Expression { return p.parseOrdered(nil) })}), nil, nil)
+}
+
 func (p *Parser) parseExpression() exp.Expression { return p.parseAlias(p.parseAssignment(), false) }
 
 func (p *Parser) parseAssignment() exp.Expression { return p.parseDisjunction() }
@@ -1028,6 +1097,9 @@ func (p *Parser) parseType() exp.Expression {
 	if atom := p.parseAtom(); atom != nil {
 		return atom
 	}
+	if interval := p.parseInterval(true); interval != nil {
+		return p.parseColumnOps(interval)
+	}
 	return p.parseColumn()
 }
 
@@ -1123,9 +1195,25 @@ var columnOperators = map[tokens.TokenType]columnOpFunc{
 	tokens.DCOLON: func(p *Parser, this, to exp.Expression) exp.Expression {
 		return p.buildCast(p.strictCast, exp.Args{"this": this, "to": to})
 	},
+	tokens.DOTCOLON: func(p *Parser, this, to exp.Expression) exp.Expression {
+		return p.expression(exp.JSONCast(exp.Args{"this": this, "to": to}), nil, nil)
+	},
+	// TODO(slice 6): convert -> and ->> RHS expressions to JSONPath.
+	tokens.ARROW: func(p *Parser, this, path exp.Expression) exp.Expression {
+		return p.expression(exp.JSONExtract(exp.Args{"this": this, "expression": path}), nil, nil)
+	},
+	tokens.DARROW: func(p *Parser, this, path exp.Expression) exp.Expression {
+		return p.expression(exp.JSONExtractScalar(exp.Args{"this": this, "expression": path}), nil, nil)
+	},
+	tokens.HASH_ARROW: func(p *Parser, this, path exp.Expression) exp.Expression {
+		return p.expression(exp.JSONBExtract(exp.Args{"this": this, "expression": path}), nil, nil)
+	},
+	tokens.DHASH_ARROW: func(p *Parser, this, path exp.Expression) exp.Expression {
+		return p.expression(exp.JSONBExtractScalar(exp.Args{"this": this, "expression": path}), nil, nil)
+	},
 }
 
-var castColumnOperators = map[tokens.TokenType]bool{tokens.DCOLON: true}
+var castColumnOperators = map[tokens.TokenType]bool{tokens.DCOLON: true, tokens.DOTCOLON: true}
 
 func (p *Parser) parseColumnOps(this exp.Expression) exp.Expression {
 	for bracketsTokens[p.curr.TokenType] {
@@ -1143,6 +1231,14 @@ func (p *Parser) parseColumnOps(this exp.Expression) exp.Expression {
 			field = p.parseDcolon()
 			if field == nil {
 				p.raiseError("Expected type")
+			}
+		} else if op != nil && p.curr.IsValid() {
+			field = p.parseColumnReference()
+			if field == nil {
+				field = p.parseBitwise()
+			}
+			if field != nil && field.Kind() == exp.KindColumn && p.match(tokens.DOT, false) {
+				field = p.parseColumnOps(field)
 			}
 		} else {
 			// Upstream _parse_column_ops takes the plain-DOT (op is None) branch here,
@@ -1519,7 +1615,7 @@ func (p *Parser) parseSubquery(this exp.Expression, parseAlias bool) exp.Express
 }
 
 func (p *Parser) parseFunction(functions map[string]func([]exp.Expression) exp.Expression, anonymous bool, optionalParens bool, anyToken bool) exp.Expression {
-	// TODO(slice 1c): parse ODBC {fn ...} wrapper syntax.
+	// TODO(1d): parse ODBC {fn ...} wrapper syntax.
 	return p.parseFunctionCall(functions, anonymous, optionalParens, anyToken)
 }
 
@@ -1539,7 +1635,7 @@ func (p *Parser) parseFunctionCall(functions map[string]func([]exp.Expression) e
 		return p.parseWindow(parser(p), false)
 	}
 	if p.next.TokenType != tokens.L_PAREN {
-		// TODO(slice 1c): NO_PAREN_FUNCTIONS CURRENT_*.
+		// TODO(1d): NO_PAREN_FUNCTIONS CURRENT_*.
 		return nil
 	}
 	if anyToken {
@@ -1798,19 +1894,27 @@ func (p *Parser) parseOrdered(parseMethod func() exp.Expression) exp.Expression 
 	if !explicitlyNullOrdered && ((!descSet || !descBool) && p.dialect.NullOrdering == "nulls_are_small" || (descSet && descBool) && p.dialect.NullOrdering != "nulls_are_small") && p.dialect.NullOrdering != "nulls_are_last" {
 		nullsFirst = true
 	}
-	// TODO(slice 1c): WITH FILL.
+	// TODO(1d): WITH FILL.
 	return p.expression(exp.Ordered(exp.Args{"this": this, "desc": desc, "nulls_first": nullsFirst}), nil, nil)
 }
 
 func (p *Parser) parseLimit(this exp.Expression, top bool, skipLimitToken bool) exp.Expression {
-	if skipLimitToken || p.match(tokens.LIMIT) {
+	limitToken := tokens.LIMIT
+	if top {
+		limitToken = tokens.TOP
+	}
+	if skipLimitToken || p.match(limitToken) {
 		comments := p.prevComments
-		// TODO(slice 1c): SUPPORTS_LIMIT_ALL and SELECT TOP.
+		// LIMIT ALL is a no-op that leaves the query unchanged (parser.py:5569-5570).
+		if p.dialect.SupportsLimitAll && p.match(tokens.ALL) {
+			return this
+		}
 		// Parsing LIMIT x% (i.e. x PERCENT) as a term leads to an error, since we try to
 		// build an exp.Mod expr. For that matter, we backtrack and instead consume the
 		// factor plus parse the percentage separately.
+		var expression exp.Expression
 		index := p.index
-		expression := p.tryParse(p.parseTerm, false)
+		expression = p.tryParse(p.parseTerm, false)
 		if expression != nil && expression.Kind() == exp.KindMod {
 			p.retreat(index)
 			expression = p.parseFactor()
@@ -1912,7 +2016,10 @@ func (p *Parser) parseWindow(this exp.Expression, alias bool) exp.Expression {
 	if funcExpr != nil {
 		comments = funcExpr.Comments()
 	}
-	// TODO(slice 1c): WITHIN GROUP.
+	if p.matchTextSeq("WITHIN", "GROUP") {
+		order := p.parseWrapped(func() exp.Expression { return p.parseOrder(nil, false) }, false)
+		this = p.expression(exp.WithinGroup(exp.Args{"this": this, "expression": order}), nil, nil)
+	}
 	if p.matchPair(tokens.FILTER, tokens.L_PAREN, true) {
 		p.match(tokens.WHERE)
 		this = p.expression(exp.Filter(exp.Args{"this": this, "expression": p.parseWhere(true)}), nil, nil)
@@ -1954,15 +2061,31 @@ func (p *Parser) parseWindow(this exp.Expression, alias bool) exp.Expression {
 		if p.match(tokens.AND) {
 			end = p.parseWindowSpec()
 		}
-		// TODO(slice 1c): EXCLUDE.
-		spec = p.expression(exp.WindowSpec(exp.Args{"kind": kind, "start": start["value"], "start_side": start["side"], "end": end["value"], "end_side": end["side"]}), nil, nil)
+		var exclude exp.Expression
+		if p.matchTextSeq("EXCLUDE") {
+			// upstream _parse_window uses the default raise_unmatched=True (parser.py:8405),
+			// so a malformed EXCLUDE option errors rather than silently retreating.
+			exclude = p.parseVarFromOptions(windowExcludeOptions, true)
+		}
+		spec = p.expression(exp.WindowSpec(exp.Args{"kind": kind, "start": start["value"], "start_side": start["side"], "end": end["value"], "end_side": end["side"], "exclude": exclude}), nil, nil)
 	}
 	p.matchRParen(this)
-	return p.expression(exp.Window(exp.Args{"this": this, "partition_by": partition, "order": order, "spec": spec, "alias": windowAlias, "over": over, "first": first}), nil, comments)
+	window := p.expression(exp.Window(exp.Args{"this": this, "partition_by": partition, "order": order, "spec": spec, "alias": windowAlias, "over": over, "first": first}), nil, comments)
+	if p.matchSet(map[tokens.TokenType]bool{tokens.OVER: true}, false) {
+		return p.parseWindow(window, alias)
+	}
+	return window
 }
 
 func (p *Parser) parseRespectOrIgnoreNulls(this exp.Expression) exp.Expression {
-	// TODO(slice 1c): IGNORE/RESPECT NULLS.
+	if p.curr.TokenType == tokens.VAR {
+		if p.matchTextSeq("IGNORE", "NULLS") {
+			return p.expression(exp.IgnoreNulls(exp.Args{"this": this}), nil, nil)
+		}
+		if p.matchTextSeq("RESPECT", "NULLS") {
+			return p.expression(exp.RespectNulls(exp.Args{"this": this}), nil, nil)
+		}
+	}
 	return this
 }
 
@@ -2049,6 +2172,26 @@ func init() {
 		tokens.LIMIT:    func(p *Parser) (string, any) { return "limit", p.parseLimit(nil, false, false) },
 		tokens.FETCH:    func(p *Parser) (string, any) { return "limit", p.parseLimit(nil, false, false) },
 		tokens.OFFSET:   func(p *Parser) (string, any) { return "offset", p.parseOffset(nil) },
+		tokens.FOR: func(p *Parser) (string, any) {
+			locks := p.parseLocks()
+			if len(locks) == 0 {
+				return "locks", nil
+			}
+			return "locks", locks
+		},
+		tokens.LOCK: func(p *Parser) (string, any) {
+			locks := p.parseLocks()
+			if len(locks) == 0 {
+				return "locks", nil
+			}
+			return "locks", locks
+		},
+		tokens.PREWHERE:   func(p *Parser) (string, any) { return "prewhere", p.parsePrewhere() },
+		tokens.CLUSTER_BY: func(p *Parser) (string, any) { return "cluster", p.parseCluster() },
+		tokens.DISTRIBUTE_BY: func(p *Parser) (string, any) {
+			return "distribute", p.parseSort(exp.KindDistribute, tokens.DISTRIBUTE_BY)
+		},
+		tokens.SORT_BY: func(p *Parser) (string, any) { return "sort", p.parseSort(exp.KindSort, tokens.SORT_BY) },
 	}
 }
 
