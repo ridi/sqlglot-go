@@ -546,6 +546,9 @@ func (p *Parser) parseSelect(opts ...bool) exp.Expression {
 		if len(comments) > 0 {
 			this.AddComments(comments, true)
 		}
+		if into := p.parseInto(); into != nil {
+			this.Set("into", into)
+		}
 		if from := p.parseFrom(false, false, false); from != nil {
 			this.Set("from_", from)
 		}
@@ -607,6 +610,17 @@ func (p *Parser) parseQueryModifiers(this exp.Expression) exp.Expression {
 		}
 	}
 	return this
+}
+
+func (p *Parser) parseInto() exp.Expression {
+	if !p.match(tokens.INTO) {
+		return nil
+	}
+	temp := p.match(tokens.TEMPORARY)
+	unlogged := p.matchTextSeq("UNLOGGED")
+	p.match(tokens.TABLE)
+	tbl := p.parseTable(true, false, nil, false, false, false, false)
+	return p.expression(exp.Into(exp.Args{"this": tbl, "temporary": temp, "unlogged": unlogged}), nil, nil)
 }
 
 func (p *Parser) parseFrom(joins bool, skipFromToken bool, consumePipe bool) exp.Expression {

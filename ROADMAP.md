@@ -85,8 +85,22 @@ Slices (ordered; each must land `go test ./...` green before the next):
      misparse), MySQL CAST(x AS TIMESTAMP/BLOB) round-trip, and the cross-dialect
      transpilation test cases (need the other 32 dialects — out of M1 scope).
 
-6. PROBE END-TO-END — jsonpath, serde, lineage bits probe touches; run probe.py’s path
-   (parse → qualify → traverse_scope) against real queries; parity vs Python sqlglot 30.12.0.
+6. PROBE END-TO-END — DONE (branch sjcho/sqlglot-go/probe; 122 tests green). probe.py ported
+   1:1 → probe/probe.go (prober struct; col2scope via Go pointer identity). Pulled SELECT..INTO
+   parsing in-scope. PARITY: 94/94 SQL×dialect cases exact-match the REAL Python sqlglot 30.12.0
+   probe.py on all enforcement-driving fields (resolved/failedStage/isWrite/origins/references/
+   outputColumns/tracedColumns), run live via PYTHONPATH=<pinned reference> python3
+   (TestProbeParity, ratcheted at 94). Committed golden files + hermetic TestProbeGolden (94/94)
+   guard the enforcement output with NO python3 needed. detail matches 88/94 (the 6 differ only
+   in Go-panic vs CPython-exception wording — by policy). ===> MILESTONE 1 COMPLETE: probe.py's
+   entire API surface (parse, exp AST, optimizer.qualify.qualify, optimizer.scope.traverse_scope)
+   is served by the Go port on MySQL + Postgres, verified at parity.
+
+   Deferred parser gaps are FAIL-CLOSED (representative, not exhaustive — also e.g. Postgres
+   `FROM ONLY`): where a construct isn't parsed yet (TVF-as-FROM [4c], MySQL ON DUPLICATE KEY
+   UPDATE VALUES() [5b], SIMILAR TO [1d]), the Go probe PARSE-fails → DENY, which is the SAFE
+   direction for a security probe (Python resolves; Go is strictly more conservative). Closing
+   these is 1d/4c/5b, not a correctness regression.
 
 Cross-cutting deferred from foundation (tracked as TODOs in code):
 - Expr→SQL (generator) — blocks all .sql() asserts.

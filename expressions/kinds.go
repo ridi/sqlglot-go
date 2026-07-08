@@ -116,6 +116,7 @@ const (
 	KindWhens
 	KindOnConflict
 	KindReturning
+	KindInto
 	KindCreate
 	KindSchema
 	KindCommand
@@ -348,6 +349,7 @@ var argTypes = map[Kind][]argSpec{
 	KindWhens:               {{"expressions", true}},
 	KindOnConflict:          {{"duplicate", false}, {"expressions", false}, {"action", false}, {"conflict_keys", false}, {"index_predicate", false}, {"constraint", false}, {"where", false}},
 	KindReturning:           {{"expressions", true}, {"into", false}},
+	KindInto:                {{"this", false}, {"temporary", false}, {"unlogged", false}, {"bulk_collect", false}, {"expressions", false}},
 	KindCreate:              {{"with_", false}, {"this", true}, {"kind", true}, {"expression", false}, {"exists", false}, {"properties", false}, {"replace", false}, {"refresh", false}, {"unique", false}, {"indexes", false}, {"no_schema_binding", false}, {"begin", false}, {"clone", false}, {"concurrently", false}, {"clustered", false}},
 	KindSchema:              {{"this", false}, {"expressions", false}},
 	KindCommand:             {{"this", true}, {"expression", false}},
@@ -656,6 +658,7 @@ var className = map[Kind]string{
 	KindWhens:               "Whens",
 	KindOnConflict:          "OnConflict",
 	KindReturning:           "Returning",
+	KindInto:                "Into",
 	KindCreate:              "Create",
 	KindSchema:              "Schema",
 	KindCommand:             "Command",

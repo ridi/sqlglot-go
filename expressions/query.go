@@ -26,6 +26,7 @@ func Rollup(args Args) Expression              { return newNode(KindRollup, args
 func GroupingSets(args Args) Expression        { return newNode(KindGroupingSets, args) }
 func Ordered(args Args) Expression             { return newNode(KindOrdered, args) }
 func Distinct(args Args) Expression            { return newNode(KindDistinct, args) }
+func Into(args Args) Expression                { return newNode(KindInto, args) }
 func Window(args Args) Expression              { return newNode(KindWindow, args) }
 func WindowSpec(args Args) Expression          { return newNode(KindWindowSpec, args) }
 func Filter(args Args) Expression              { return newNode(KindFilter, args) }
