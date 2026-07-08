@@ -1280,6 +1280,11 @@ func (g *Generator) columnDefSQL(e expressions.Expression) string {
 	if position != "" {
 		position = " " + position
 	}
+
+	if e.Find(expressions.KindComputedColumnConstraint) != nil && !g.dialect.ComputedColumnWithType {
+		kind = ""
+	}
+
 	return exists + column + kind + constraints + position
 }
 
@@ -1287,11 +1292,60 @@ func (g *Generator) commandSQL(e expressions.Expression) string {
 	return strings.TrimSpace(g.sqlKey(e, "this") + " " + strings.TrimSpace(e.Text("expression")))
 }
 
+// mysqlUnsignedTypeMapping ports MySQL's UNSIGNED_TYPE_MAPPING (generators/mysql.py:236-244):
+// each unsigned integer/decimal DType renders as its signed base name followed by " UNSIGNED"
+// (e.g. UINT -> "INT UNSIGNED", UBIGINT(20) -> "BIGINT(20) UNSIGNED"). This is the self-contained
+// subset of MySQL's TYPE_MAPPING needed for the DDL slice; the broader per-dialect TYPE_MAPPING
+// table (ROADMAP 5b) is still out of scope, but these seven fixed entries don't require it.
+var mysqlUnsignedTypeMapping = map[expressions.DType]string{
+	expressions.DTypeUBigInt:    "BIGINT",
+	expressions.DTypeUInt:       "INT",
+	expressions.DTypeUMediumInt: "MEDIUMINT",
+	expressions.DTypeUSmallInt:  "SMALLINT",
+	expressions.DTypeUTinyInt:   "TINYINT",
+	expressions.DTypeUDecimal:   "DECIMAL",
+	expressions.DTypeUDouble:    "DOUBLE",
+}
+
+// dataTypeSQL ports datatype_sql (generator.py:1706-...) plus dialect-specific overrides that
+// don't require the full per-dialect TYPE_MAPPING table (out of scope for this slice; see
+// ROADMAP 5b): MySQL's VARCHAR_REQUIRES_SIZE -> TEXT rewrite (generators/mysql.py:670-677),
+// MySQL's UNSIGNED_TYPE_MAPPING suffix (generators/mysql.py:678-684, via mysqlUnsignedTypeMapping
+// above), and Postgres's ARRAY/ENUM/FLOAT-with-precision rendering (generators/postgres.py:477-489).
 func (g *Generator) dataTypeSQL(e expressions.Expression) string {
+	if g.dialect.Name == "mysql" {
+		if g.dialect.VarcharRequiresSize && expressions.IsType(e, expressions.DTypeVarchar) && len(listFromValue(e.Arg("expressions"))) == 0 {
+			// VARCHAR must always have a size - if it doesn't, we always generate TEXT.
+			return "TEXT"
+		}
+	} else if g.dialect.Name == "postgres" {
+		if expressions.IsType(e, expressions.DTypeArray) {
+			if len(listFromValue(e.Arg("expressions"))) > 0 {
+				valuesSQL := g.expressions(exprsOptions{expression: e, key: "values", flat: true})
+				return g.expressions(exprsOptions{expression: e, flat: true}) + "[" + valuesSQL + "]"
+			}
+			return "ARRAY"
+		}
+		if expressions.IsType(e, expressions.DTypeEnum) {
+			return "ENUM (" + g.expressions(exprsOptions{expression: e, flat: true}) + ")"
+		}
+		if (expressions.IsType(e, expressions.DTypeDouble) || expressions.IsType(e, expressions.DTypeFloat)) && len(listFromValue(e.Arg("expressions"))) > 0 {
+			// Postgres doesn't support precision for REAL and DOUBLE PRECISION types.
+			return "FLOAT(" + g.expressions(exprsOptions{expression: e, flat: true}) + ")"
+		}
+	}
+
 	nested := ""
 	values := ""
 	exprNested := truthy(e.Arg("nested"))
 	typeValue := e.Arg("this")
+	// MySQL renders unsigned numeric types as "<signed base> UNSIGNED" (see mysqlUnsignedTypeMapping).
+	mysqlUnsignedBase := ""
+	if g.dialect.Name == "mysql" {
+		if dt, ok := typeValue.(expressions.DType); ok {
+			mysqlUnsignedBase = mysqlUnsignedTypeMapping[dt]
+		}
+	}
 	var interior string
 	if exprNested && g.pretty {
 		interior = g.expressions(exprsOptions{expression: e, dynamic: true, newLine: true, skipFirst: true, skipLast: true})
@@ -1301,7 +1355,9 @@ func (g *Generator) dataTypeSQL(e expressions.Expression) string {
 	var typeSQL string
 	switch tv := typeValue.(type) {
 	case expressions.DType:
-		if tv == expressions.DTypeUserDefined && truthy(e.Arg("kind")) {
+		if mysqlUnsignedBase != "" {
+			typeSQL = mysqlUnsignedBase
+		} else if tv == expressions.DTypeUserDefined && truthy(e.Arg("kind")) {
 			typeSQL = g.sqlKey(e, "kind")
 		} else if tv == expressions.DTypeCharacterSet {
 			return "CHAR CHARACTER SET " + g.sqlKey(e, "kind")
@@ -1335,6 +1391,11 @@ func (g *Generator) dataTypeSQL(e expressions.Expression) string {
 		}
 	}
 	typeSQL = typeSQL + nested + values
+	if mysqlUnsignedBase != "" {
+		// Append the UNSIGNED suffix after the base name + any size/params (mysql.py:681-683
+		// does `f"{super().datatype_sql(...)} UNSIGNED"`), e.g. "BIGINT(20) UNSIGNED".
+		typeSQL += " UNSIGNED"
+	}
 	collate := g.sqlKey(e, "collate")
 	if collate != "" {
 		typeSQL += " COLLATE " + collate

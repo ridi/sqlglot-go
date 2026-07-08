@@ -219,15 +219,17 @@ func writeGaps(fails map[gapKey]string) error {
 	return os.WriteFile(parityGapsPath, []byte(b.String()), 0o644)
 }
 
-// Baselines observed from a full local run over Scope A (identity.sql) plus
-// Scope B (dialect_identity.jsonl): base 745/955, mysql 85/424, postgres
-// 223/468. These are monotonic pass floors — raise them as coverage improves,
-// never lower them to mask a regression. A drop below any floor fails the build
-// even if the regressing case is also (illegitimately) added to parity_gaps.txt.
+// Pass counts observed from a full local run over Scope A (identity.sql) plus
+// Scope B (dialect_identity.jsonl): base 859/955, mysql 308/424, postgres
+// 321/468 (after the DDL parity slice, incl. the MySQL AUTO_INCREMENT/computed-
+// column/UNSIGNED and ALTER-fallback fixes). These are monotonic pass floors —
+// raise them as coverage improves, never lower them to mask a regression. A drop
+// below any floor fails the build even if the regressing case is also
+// (illegitimately) added to parity_gaps.txt.
 const (
-	minPassBase     = 803
-	minPassMySQL    = 247
-	minPassPostgres = 297
+	minPassBase     = 859
+	minPassMySQL    = 308
+	minPassPostgres = 321
 )
 
 // Minimum record counts per corpus, from the committed fixtures (identity.sql:

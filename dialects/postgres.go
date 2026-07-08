@@ -14,6 +14,8 @@ func Postgres() *Dialect {
 	d.NullOrdering = "nulls_are_large"
 	d.SupportsLimitAll = true
 	d.TablesReferenceableAsColumns = true
+	// generators/postgres.py:234 RENAME_TABLE_WITH_DB = False.
+	d.RenameTableWithDB = false
 	// TODO(slice 5b): DEFAULT_FUNCTIONS_COLUMN_NAMES (needs KindExplodingGenerateSeries + FUNCTIONS override).
 	// TODO(slice 5b): typing/{mysql,postgres}.py EXPRESSION_METADATA — feeds annotate_types only, off probe's path (ROADMAP 4c).
 

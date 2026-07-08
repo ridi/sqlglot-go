@@ -1188,6 +1188,40 @@ func buildFetchTokens() map[tokens.TokenType]bool {
 	return m
 }
 
+// alterables mirrors parser.py:657-662 ALTERABLES: the creatable kinds ALTER accepts.
+var alterables = map[tokens.TokenType]bool{
+	tokens.INDEX:   true,
+	tokens.TABLE:   true,
+	tokens.VIEW:    true,
+	tokens.SESSION: true,
+}
+
+// addConstraintTokens mirrors parser.py:1685-1692 ADD_CONSTRAINT_TOKENS: the token types
+// that make `ALTER TABLE ... ADD <x>` a constraint addition (exp.AddConstraint) rather than
+// a column addition.
+var addConstraintTokens = map[tokens.TokenType]bool{
+	tokens.CONSTRAINT:  true,
+	tokens.FOREIGN_KEY: true,
+	tokens.INDEX:       true,
+	tokens.KEY:         true,
+	tokens.PRIMARY_KEY: true,
+	tokens.UNIQUE:      true,
+}
+
+// keyConstraintOptions mirrors parser.py:1642-1655 KEY_CONSTRAINT_OPTIONS, the trailing
+// FOREIGN KEY/PRIMARY KEY/UNIQUE/REFERENCES option vocabulary (NOT ENFORCED, MATCH FULL/
+// PARTIAL/SIMPLE, INITIALLY DEFERRED/IMMEDIATE, USING BTREE/HASH, DEFERRABLE/NORELY/RELY),
+// consumed via parseVarFromOptions inside parseKeyConstraintOptions.
+var keyConstraintOptions = optionsType{
+	"NOT":        {{"ENFORCED"}},
+	"MATCH":      {{"FULL"}, {"PARTIAL"}, {"SIMPLE"}},
+	"INITIALLY":  {{"DEFERRED"}, {"IMMEDIATE"}},
+	"USING":      {{"BTREE"}, {"HASH"}},
+	"DEFERRABLE": nil,
+	"NORELY":     nil,
+	"RELY":       nil,
+}
+
 // reservedTokens mirrors parser.py:613 RESERVED_TOKENS:
 //
 //	{*Tokenizer.SINGLE_TOKENS.values(), SELECT} - {IDENTIFIER}

@@ -43,16 +43,46 @@ func TestParseCreate(t *testing.T) {
 		t.Fatalf("property-bearing CREATE should degrade to Command:\n%s", command.ToS())
 	}
 
-	// Column constraints are deferred to 1c; a CREATE that carries them must degrade
-	// cleanly to a Command rather than fail on a stale "Expecting )" (LOCAL fix).
-	for _, sql := range []string{
-		"CREATE TABLE t (a INT NOT NULL)",
-		"CREATE TABLE t (id INT PRIMARY KEY, name VARCHAR(50) NOT NULL)",
-		"CREATE TABLE t (a INT DEFAULT 0)",
-	} {
-		degraded := parseOne(t, sql)
-		if degraded.Kind() != exp.KindCommand || degraded.Arg("this") != "CREATE" {
-			t.Fatalf("constrained CREATE should degrade to Command: %q ->\n%s", sql, degraded.ToS())
-		}
+	// Column constraints are structured as of this DDL slice (parser_ddl.go/
+	// parser_constraints.go): a CREATE that carries them now parses into a real
+	// exp.Create/exp.ColumnDef/exp.ColumnConstraint tree instead of degrading to Command
+	// (this replaces the earlier "degrades to Command" regression-trap assertion).
+	create = parseOne(t, "CREATE TABLE t (a INT NOT NULL)")
+	if create.Kind() != exp.KindCreate {
+		t.Fatalf("kind = %v, want Create:\n%s", create.Kind(), create.ToS())
+	}
+	col := exprArg(t, create, "this").Expressions()[0]
+	if col.Kind() != exp.KindColumnDef {
+		t.Fatalf("column mismatch:\n%s", create.ToS())
+	}
+	constraints := expressionsForArg(col, "constraints")
+	if len(constraints) != 1 || constraints[0].Kind() != exp.KindColumnConstraint {
+		t.Fatalf("constraints mismatch:\n%s", create.ToS())
+	}
+	if exprArg(t, constraints[0], "kind").Kind() != exp.KindNotNullColumnConstraint {
+		t.Fatalf("constraint kind mismatch:\n%s", create.ToS())
+	}
+
+	create = parseOne(t, "CREATE TABLE t (id INT PRIMARY KEY, name VARCHAR(50) NOT NULL)")
+	if create.Kind() != exp.KindCreate {
+		t.Fatalf("kind = %v, want Create:\n%s", create.Kind(), create.ToS())
+	}
+	pkCols := exprArg(t, create, "this").Expressions()
+	if len(pkCols) != 2 || pkCols[0].Kind() != exp.KindColumnDef || pkCols[1].Kind() != exp.KindColumnDef {
+		t.Fatalf("columns mismatch:\n%s", create.ToS())
+	}
+	pkConstraints := expressionsForArg(pkCols[0], "constraints")
+	if len(pkConstraints) != 1 || exprArg(t, pkConstraints[0], "kind").Kind() != exp.KindPrimaryKeyColumnConstraint {
+		t.Fatalf("primary key constraint mismatch:\n%s", create.ToS())
+	}
+
+	create = parseOne(t, "CREATE TABLE t (a INT DEFAULT 0)")
+	if create.Kind() != exp.KindCreate {
+		t.Fatalf("kind = %v, want Create:\n%s", create.Kind(), create.ToS())
+	}
+	defCol := exprArg(t, create, "this").Expressions()[0]
+	defConstraints := expressionsForArg(defCol, "constraints")
+	if len(defConstraints) != 1 || exprArg(t, defConstraints[0], "kind").Kind() != exp.KindDefaultColumnConstraint {
+		t.Fatalf("default constraint mismatch:\n%s", create.ToS())
 	}
 }

@@ -83,6 +83,48 @@ type Dialect struct {
 	QueryResultsAreStructs             bool
 	RequiresParenthesizedStructAccess  bool
 	IndexOffset                        int
+	// RenameTableWithDB ports the generator flag of the same name (generator.py:344): base
+	// allows `ALTER TABLE db.a RENAME TO db.b`, some dialects (e.g. postgres, generators/
+	// postgres.py:234) only allow renaming within the same db and drop the db qualifier.
+	RenameTableWithDB bool
+	// SupportsModifyColumn ports the generator flag of the same name (generator.py:475):
+	// whether `ALTER TABLE ... MODIFY COLUMN <column-redefinition>` syntax is supported.
+	SupportsModifyColumn bool
+	// SupportsChangeColumn ports the generator flag of the same name (generator.py:478):
+	// whether `ALTER TABLE ... CHANGE COLUMN <rename-and-redefine>` syntax is supported.
+	SupportsChangeColumn bool
+	// VarcharRequiresSize ports the MySQL-generator-family flag of the same name
+	// (generators/mysql.py:149): MySQL requires VARCHAR to carry an explicit size.
+	VarcharRequiresSize bool
+	// AlterTableSupportsCascade ports the dialect flag of the same name (dialects/dialect.py:
+	// 701): whether ALTER TABLE ... CASCADE is supported to propagate a column change to
+	// existing partitions (Hive-family only).
+	AlterTableSupportsCascade bool
+	// AlterTableAddRequiredForEachColumn ports the dialect flag of the same name (dialects/
+	// dialect.py:709): whether ADD must be repeated for each column added by ALTER TABLE.
+	AlterTableAddRequiredForEachColumn bool
+	// AlterRenameRequiresColumn ports the parser flag of the same name (parser.py:1819):
+	// whether renaming a column with ALTER requires the presence of the COLUMN keyword.
+	AlterRenameRequiresColumn bool
+	// AlterTablePartitions ports the parser flag of the same name (parser.py:1822): whether
+	// ALTER statements are allowed to contain PARTITION specifications.
+	AlterTablePartitions bool
+	// AlterTableIncludeColumnKeyword ports the generator flag of the same name (generator.py:
+	// 400): whether the word COLUMN is included when adding a column with ALTER TABLE.
+	AlterTableIncludeColumnKeyword bool
+	// ComputedColumnWithType ports the generator flag of the same name (generator.py:412):
+	// whether to include the type of a computed column in the CREATE DDL.
+	ComputedColumnWithType bool
+	// AlterSetWrapped ports the generator flag of the same name (generator.py:568): whether
+	// to wrap AlterSet's properties in parens, e.g. `ALTER ... SET (<props>)`.
+	AlterSetWrapped bool
+	// AlterSetType ports the generator flag of the same name (generator.py:582): the syntax
+	// to use when altering the type of a column via ALTER SET.
+	AlterSetType string
+	// SupportsDropAlterIcebergProperty ports the generator flag of the same name (generator.py:
+	// 619): whether DROP/ALTER can carry the ICEBERG keyword (e.g. Snowflake's `DROP ICEBERG
+	// TABLE a.b`; DuckDB overrides to False and just emits `DROP TABLE a.b`).
+	SupportsDropAlterIcebergProperty bool
 }
 
 func Base() *Dialect {
@@ -121,6 +163,36 @@ func Base() *Dialect {
 		UnnestColumnOnly:     false,
 		Pseudocolumns:        map[string]bool{},
 		IndexOffset:          0,
+		// generator.py:344 RENAME_TABLE_WITH_DB = True (base); postgres overrides to False
+		// (generators/postgres.py:234).
+		RenameTableWithDB: true,
+		// generator.py:475/478 SUPPORTS_MODIFY_COLUMN/SUPPORTS_CHANGE_COLUMN = False (base);
+		// MySQL overrides both to True (generators/mysql.py:127-128).
+		SupportsModifyColumn: false,
+		SupportsChangeColumn: false,
+		// generators/mysql.py:149 VARCHAR_REQUIRES_SIZE = True; not a base Generator
+		// attribute at all (only referenced within the MySQL generator family), so base
+		// (and postgres, which doesn't override it) is False.
+		VarcharRequiresSize: false,
+		// dialects/dialect.py:701 ALTER_TABLE_SUPPORTS_CASCADE = False (base); only the
+		// Hive-family dialects (out of scope here) override to True.
+		AlterTableSupportsCascade: false,
+		// dialects/dialect.py:709 ALTER_TABLE_ADD_REQUIRED_FOR_EACH_COLUMN = True (base).
+		AlterTableAddRequiredForEachColumn: true,
+		// parser.py:1819 ALTER_RENAME_REQUIRES_COLUMN = True (base).
+		AlterRenameRequiresColumn: true,
+		// parser.py:1822 ALTER_TABLE_PARTITIONS = False (base); only Hive overrides to True.
+		AlterTablePartitions: false,
+		// generator.py:400 ALTER_TABLE_INCLUDE_COLUMN_KEYWORD = True (base).
+		AlterTableIncludeColumnKeyword: true,
+		// generator.py:412 COMPUTED_COLUMN_WITH_TYPE = True (base).
+		ComputedColumnWithType: true,
+		// generator.py:568 ALTER_SET_WRAPPED = False (base).
+		AlterSetWrapped: false,
+		// generator.py:582 ALTER_SET_TYPE = "SET DATA TYPE" (base).
+		AlterSetType: "SET DATA TYPE",
+		// generator.py:619 SUPPORTS_DROP_ALTER_ICEBERG_PROPERTY = True (base).
+		SupportsDropAlterIcebergProperty: true,
 	}
 }
 

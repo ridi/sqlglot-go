@@ -22,6 +22,11 @@ func MySQL() *Dialect {
 	// generators/mysql.py:139 VALUES_AS_TABLE = False: a table-source VALUES is rewritten
 	// into `(SELECT ... UNION ALL ...) AS t` instead of a bare VALUES constructor.
 	d.ValuesAsTable = false
+	// generators/mysql.py:127-128 SUPPORTS_MODIFY_COLUMN/SUPPORTS_CHANGE_COLUMN = True.
+	d.SupportsModifyColumn = true
+	d.SupportsChangeColumn = true
+	// generators/mysql.py:149 VARCHAR_REQUIRES_SIZE = True.
+	d.VarcharRequiresSize = true
 
 	for _, unit := range []string{
 		"SECOND_MICROSECOND",
