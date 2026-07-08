@@ -19,9 +19,10 @@ val json: String = io.github.sjincho.sqlglot.Sqlglot.probeJson(sql, dialect, sch
 
 - **JDK 22+** to consume (FFM is stable since 22). Run the app with
   `--enable-native-access=ALL-UNNAMED` to silence the restricted-method warning.
-- **To build the native library** (see below), the build machine needs the **Go toolchain (1.23+)**
-  and a **C compiler** (cgo). The Gradle build runs `go build -buildmode=c-shared` for you; you do
-  not write or run Go yourself.
+- **To build the native library** (see below), the build machine needs the **Go toolchain**, a **C
+  compiler** (cgo), and — for the multi-platform build — **Zig** (the Linux cross C compiler). All of
+  these are pinned in this repo's **`mise.toml`**; run `mise install` and you're set. The Gradle
+  build runs `go build -buildmode=c-shared` for you; you never write or run Go yourself.
 
 ## Recommended: vendor via `git subtree` + Gradle composite build
 
@@ -92,8 +93,9 @@ already parses that JSON works unchanged; only the call site changes.
   runs on all supported targets** (`darwin/arm64`, `linux/amd64`, `linux/arm64`), build once with:
 
   ```bash
-  # run on macOS/arm64; needs the Go toolchain + Zig (`brew install zig` or `mise use -g zig`)
-  cd jvm && gradle -Psqlglot.native.all=true build
+  # run on macOS/arm64. The toolchain (go, zig, java, gradle) is pinned in this repo's mise.toml:
+  mise install                                       # once, from the repo root
+  cd jvm && mise exec -- gradle build -Psqlglot.native.all=true
   ```
 
   The host (darwin/arm64) is built natively; the two Linux targets are cross-compiled with **Zig**

@@ -1,0 +1,13 @@
+# Local toolchain for sqlglot-go, managed by mise (https://mise.jdx.dev). Run `mise install`.
+#
+# - go:     the core library + the cmd/libsqlglot c-shared entry point.
+# - zig:    cross C compiler for the JVM binding's multi-platform native build
+#           (`cd jvm && mise exec -- gradle build -Psqlglot.native.all=true`).
+# - java:   to build/run the JVM binding (jvm/); GraalVM CE 24 matches the intended consumer and
+#           gives stable FFM (java.lang.foreign). Any JDK 22+ works.
+# - gradle: to build the JVM binding.
+[tools]
+go = "1.23"
+zig = "0.16.0"
+java = "graalvm-community-24.0.2"
+gradle = "8.14.5"
