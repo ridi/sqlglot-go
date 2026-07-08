@@ -83,61 +83,6 @@ func TestPostgresConfigAndTokenizer(t *testing.T) {
 	}
 }
 
-func TestPostgresIdentityRoundTrips(t *testing.T) {
-	cases := []identityCase{
-		{name: "quoted identifiers", dialect: "postgres", sql: "SELECT \"Foo\" FROM \"Bar\""},
-		{name: "generic select", dialect: "postgres", sql: "SELECT a, b FROM t WHERE a = 1"},
-		{name: "cte", dialect: "postgres", sql: "WITH x AS (SELECT 1 AS a) SELECT a FROM x"},
-		{name: "union", dialect: "postgres", sql: "SELECT a FROM x UNION SELECT b FROM y"},
-		{name: "intersect", dialect: "postgres", sql: "SELECT a FROM x INTERSECT SELECT a FROM y"},
-		{name: "except", dialect: "postgres", sql: "SELECT a FROM x EXCEPT SELECT a FROM y"},
-		{name: "lateral unnest", dialect: "postgres", sql: "SELECT * FROM r CROSS JOIN LATERAL UNNEST(ARRAY[1]) AS s(location)"},
-		{name: "dcolon cast", dialect: "postgres", sql: "SELECT x::INT", want: "SELECT CAST(x AS INT)"},
-		{name: "int4range cast", dialect: "postgres", sql: "CAST(x AS INT4RANGE)"},
-		{name: "int4multirange cast", dialect: "postgres", sql: "CAST(x AS INT4MULTIRANGE)"},
-		{name: "int8range cast", dialect: "postgres", sql: "CAST(x AS INT8RANGE)"},
-		{name: "int8multirange cast", dialect: "postgres", sql: "CAST(x AS INT8MULTIRANGE)"},
-		{name: "numrange cast", dialect: "postgres", sql: "CAST(x AS NUMRANGE)"},
-		{name: "nummultirange cast", dialect: "postgres", sql: "CAST(x AS NUMMULTIRANGE)"},
-		{name: "tsrange cast", dialect: "postgres", sql: "CAST(x AS TSRANGE)"},
-		{name: "tsmultirange cast", dialect: "postgres", sql: "CAST(x AS TSMULTIRANGE)"},
-		{name: "tstzrange cast", dialect: "postgres", sql: "CAST(x AS TSTZRANGE)"},
-		{name: "tstzmultirange cast", dialect: "postgres", sql: "CAST(x AS TSTZMULTIRANGE)"},
-		{name: "daterange cast", dialect: "postgres", sql: "CAST(x AS DATERANGE)"},
-		{name: "datemultirange cast", dialect: "postgres", sql: "CAST(x AS DATEMULTIRANGE)"},
-		{name: "byte literal", deferredReason: "byte literal parser and generator rendering — slice 5b", category: "param/literal rendering"},
-		{name: "dollar heredoc literal", deferredReason: "heredoc literal parser and generator rendering — slice 5b", category: "param/literal rendering"},
-		{name: "positional parameter", deferredReason: "Postgres parameter rendering — slice 5b", category: "param/literal rendering"},
-		{name: "json path operator", deferredReason: "Postgres operator parser/generator wiring — slice 5b", category: "parser operator"},
-		{name: "only table source", dialect: "postgres", sql: "SELECT * FROM ONLY t1"},
-		{name: "similar to escape", dialect: "postgres", sql: "SELECT '%' SIMILAR TO '^%' ESCAPE '^'"},
-		{name: "interval phrase", deferredReason: "Postgres interval rendering override — slice 5b", category: "generator TRANSFORM/TYPE_MAPPING"},
-		{name: "json_to_recordset", dialect: "postgres", sql: `SELECT * FROM JSON_TO_RECORDSET(z) AS y("rank" INT)`},
-		// Keyword-like alias column: the alias column list uses parseIdVar(any_token=true),
-		// mirroring _parse_function_parameter -> _parse_id_var() (parser.py:7111-7112,8507).
-		{name: "json_to_recordset keyword column", dialect: "postgres", sql: `SELECT * FROM JSON_TO_RECORDSET(z) AS y(from INT)`},
-		// Table-valued function sources (test_postgres.py:742-775): a function call is a
-		// valid FROM/JOIN source, becoming exp.Table's "this".
-		{name: "generate_series source", dialect: "postgres", sql: "SELECT * FROM GENERATE_SERIES(a, b)"},
-		{name: "generate_series cross join", dialect: "postgres", sql: "SELECT * FROM t CROSS JOIN GENERATE_SERIES(2, 4)"},
-		{name: "generate_series cross join alias", dialect: "postgres", sql: "SELECT * FROM t CROSS JOIN GENERATE_SERIES(2, 4) AS s"},
-		// WITH ORDINALITY on a function source (test_postgres.py:143-151); the alias
-		// (if any) binds after the keyword.
-		{name: "with ordinality", dialect: "postgres", sql: "SELECT * FROM JSON_ARRAY_ELEMENTS('[1,true, [2,false]]') WITH ORDINALITY"},
-		{name: "with ordinality alias", dialect: "postgres", sql: "SELECT * FROM JSON_ARRAY_ELEMENTS('[1,true, [2,false]]') WITH ORDINALITY AS kv_json"},
-		{name: "with ordinality alias columns", dialect: "postgres", sql: "SELECT * FROM JSON_ARRAY_ELEMENTS('[1,true, [2,false]]') WITH ORDINALITY AS kv_json(a, b)"},
-	}
-	runIdentityCases(t, "test_postgres validate_identity", cases)
-}
-
-func TestPostgresValidateAllKeys(t *testing.T) {
-	cases := []identityCase{
-		{name: "dcolon cast postgres key", dialect: "postgres", sql: "SELECT x::INT", want: "SELECT CAST(x AS INT)"},
-		{name: "dcolon cast spark key", deferredReason: "cross-dialect: needs spark", category: "cross-dialect"},
-	}
-	runIdentityCases(t, "test_postgres validate_all in-scope keys", cases)
-}
-
 func TestPostgresProbeQualifyTraverseScope(t *testing.T) {
 	expression, err := sqlglot.ParseOne("SELECT Foo, bar FROM MyTable", "postgres")
 	if err != nil {

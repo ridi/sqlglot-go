@@ -9,6 +9,13 @@
 /dist/
 coverage.txt
 
+# Python (extractor bytecode cache, recreated on every run)
+__pycache__/
+*.pyc
+
+# Agent workflow scratch (git worktrees created by tooling)
+.claude/worktrees/
+
 # Editor / OS
 .DS_Store
 .idea/

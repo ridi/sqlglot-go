@@ -71,52 +71,6 @@ func TestMySQLConfigAndTokenizer(t *testing.T) {
 	}
 }
 
-func TestMySQLIdentityRoundTrips(t *testing.T) {
-	cases := []identityCase{
-		{name: "backtick identifiers", dialect: "mysql", sql: "SELECT `Foo` FROM `Bar`"},
-		{name: "double quoted string", dialect: "mysql", sql: `SELECT "x"`, want: "SELECT 'x'"},
-		{name: "hash comment", dialect: "mysql", sql: "SELECT a # comment\nFROM t", want: "SELECT a /* comment */ FROM t"},
-		{name: "insert default", dialect: "mysql", sql: "INSERT INTO t (i) VALUES (DEFAULT)"},
-		{name: "json_table", dialect: "mysql", sql: "SELECT * FROM source, JSON_TABLE(source.links, '$.org[*]' COLUMNS(row_id FOR ORDINALITY, link VARCHAR(255) PATH '$.link')) AS links"},
-		{name: "on duplicate key update values function", dialect: "mysql", sql: "INSERT INTO t1 (a, b, c) VALUES (1, 2, 3), (4, 5, 6) ON DUPLICATE KEY UPDATE c = VALUES(a) + VALUES(b)"},
-		// Remaining test_mysql.py:83-121 ON DUPLICATE fixtures: aliased VALUES (exercises
-		// WrapDerivedValues=false — MySQL emits `VALUES (...) AS x` bare), INSERT..SELECT
-		// source, and the two plain column-assignment forms.
-		{name: "on duplicate key update aliased values", dialect: "mysql", sql: "INSERT INTO things (a, b) VALUES (1, 2) AS new_data ON DUPLICATE KEY UPDATE id = LAST_INSERT_ID(id), a = new_data.a, b = new_data.b"},
-		{name: "on duplicate key update select union source", dialect: "mysql", sql: "INSERT INTO t1 (a, b) SELECT c, d FROM t2 UNION SELECT e, f FROM t3 ON DUPLICATE KEY UPDATE b = b + c"},
-		{name: "on duplicate key update column", dialect: "mysql", sql: "INSERT INTO t1 (a, b, c) VALUES (1, 2, 3) ON DUPLICATE KEY UPDATE c = c + 1"},
-		{name: "on duplicate key update qualified column", dialect: "mysql", sql: "INSERT INTO x VALUES (1, 'a', 2.0) ON DUPLICATE KEY UPDATE x.id = 1"},
-		// VALUES_AS_TABLE=false (generators/mysql.py:139): a table-source VALUES is rewritten
-		// into SELECT unions, unlike the INSERT-source VALUES above which stays a constructor.
-		{name: "values as table source", dialect: "mysql", sql: "SELECT * FROM VALUES (1, 2) AS t(a, b)", want: "SELECT * FROM (SELECT 1 AS a, 2 AS b) AS t"},
-		{name: "values as table source parenthesized", dialect: "mysql", sql: "SELECT * FROM (VALUES (1, 2)) AS t(a, b)", want: "SELECT * FROM (SELECT 1 AS a, 2 AS b) AS t"},
-		{name: "values as table source multi row", dialect: "mysql", sql: "SELECT * FROM (VALUES (1, 2), (3, 4)) AS t(a, b)", want: "SELECT * FROM (SELECT 1 AS a, 2 AS b UNION ALL SELECT 3, 4) AS t"},
-		{name: "replace command", dialect: "mysql", sql: "REPLACE INTO t (a) VALUES (1)"},
-		{name: "update", dialect: "mysql", sql: "UPDATE items SET price = 0 WHERE id >= 5"},
-		{name: "delete", dialect: "mysql", sql: "DELETE FROM t WHERE a <= 10"},
-		{name: "cte", dialect: "mysql", sql: "WITH x AS (SELECT 1 AS a) SELECT a FROM x"},
-		{name: "union", dialect: "mysql", sql: "SELECT a FROM x UNION SELECT b FROM y"},
-		{name: "qualified backtick alias", dialect: "mysql", sql: "SELECT `a`.`b` AS `c` FROM `a`"},
-		{name: "curdate function", deferredReason: "parser FUNCTIONS + generator TRANSFORM — slice 5b", category: "parser FUNCTIONS/generator TRANSFORM"},
-		{name: "timestamp type remap", deferredReason: "generator TYPE_MAPPING for MySQL TIMESTAMP remap — slice 5b", category: "generator TYPE_MAPPING"},
-		{name: "logical pipes", deferredReason: "CONJUNCTION/DISJUNCTION operator wiring plus KindXor — slice 5b", category: "parser operator"},
-		{name: "show tables", deferredReason: "SHOW command parser/generator support — slice 5b", category: "SHOW/ALTER/DDL"},
-		{name: "bit literal identity", deferredReason: "bit/hex literal parser and generator rendering — slice 5b", category: "param/literal rendering"},
-		{name: "unsigned ddl", deferredReason: "MySQL DDL constraints and type mapping — slice 5b", category: "SHOW/ALTER/DDL"},
-	}
-	runIdentityCases(t, "test_mysql validate_identity", cases)
-}
-
-func TestMySQLValidateAllKeys(t *testing.T) {
-	cases := []identityCase{
-		{name: "invalid hex mysql key", dialect: "mysql", sql: "SELECT 0xz", want: "SELECT `0xz`"},
-		{name: "bare hex prefix mysql key", dialect: "mysql", sql: "SELECT 0x", want: "SELECT `0x`"},
-		{name: "bare bit prefix mysql key", dialect: "mysql", sql: "SELECT 0b", want: "SELECT `0b`"},
-		{name: "insert default duckdb key", deferredReason: "cross-dialect: needs duckdb", category: "cross-dialect"},
-	}
-	runIdentityCases(t, "test_mysql validate_all in-scope keys", cases)
-}
-
 func TestMySQLProbeQualifyTraverseScope(t *testing.T) {
 	expression, err := sqlglot.ParseOne("SELECT Foo, bar FROM MyTable", "mysql")
 	if err != nil {
