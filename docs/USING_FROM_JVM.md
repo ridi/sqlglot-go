@@ -87,10 +87,22 @@ already parses that JSON works unchanged; only the call site changes.
 - **Thread-safety:** `Sqlglot.probeJson` is safe to call concurrently (the native side is a pure
   function; each call uses its own confined `Arena`). No pool needed. Verified under a 16-thread /
   4000-call stress test.
-- **Platforms:** `buildNativeLib` builds for the **host** platform. If your build and deploy
-  platforms differ (e.g. build on macOS, deploy on Linux), build on the target platform, or extend
-  the binding to bundle multiple prebuilt libs (`native/<os>-<arch>/`) via a CI matrix and publish a
-  fat jar to a Maven repo — then depend on that coordinate instead of the composite build.
+- **Platforms.** The default build (`gradle build`, used by the composite/dev path) compiles the
+  native lib for the **host only** — fast, no extra toolchain. To produce a **single fat jar that
+  runs on all supported targets** (`darwin/arm64`, `linux/amd64`, `linux/arm64`), build once with:
+
+  ```bash
+  # run on macOS/arm64; needs the Go toolchain + Zig (`brew install zig` or `mise use -g zig`)
+  cd jvm && gradle -Psqlglot.native.all=true build
+  ```
+
+  The host (darwin/arm64) is built natively; the two Linux targets are cross-compiled with **Zig**
+  as the C compiler (`zig cc -target …`, pinned to glibc 2.17 for forward-compat). All three libs are
+  bundled at `native/<os>-<arch>/…` and the wrapper picks the right one at runtime — so the one jar
+  runs on any of the three. (Cross-building the darwin target from Linux needs the macOS SDK, so the
+  all-targets build must run on macOS; `.github/workflows/jvm.yml` does exactly this in CI and
+  runtime-verifies the Linux lib on a Linux runner.) Add `-Pzig=/path/to/zig` if `zig` isn't on PATH.
+  For platforms beyond these three, add a `NativeTarget` to `jvm/build.gradle.kts`.
 - **Publishing to Maven** (Central / internal Nexus) instead of subtree: the `jvm/` project already
   applies `maven-publish`; set real `group`/`version`, run a CI matrix to bundle all target
   `native/<os>-<arch>/` libs, and `./gradlew publish`. Consumers then just add the coordinate.
