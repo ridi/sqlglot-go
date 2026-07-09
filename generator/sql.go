@@ -206,7 +206,8 @@ func (g *Generator) identifierSQL(e expressions.Expression) string {
 		text = lower
 	}
 	text = strings.ReplaceAll(text, g.identifierEnd, g.escapedIdentifierEnd)
-	if quoted || g.canQuoteIdentifier(e) || (!g.dialect.TokenizerConfig.IdentifiersCanStartWithDigit && startsWithDigit(text)) {
+	if quoted || g.canQuoteIdentifier(e) || g.dialect.ReservedKeywords[lower] ||
+		(!g.dialect.TokenizerConfig.IdentifiersCanStartWithDigit && startsWithDigit(text)) {
 		text = g.identifierStart + g.replaceLineBreaks(text) + g.identifierEnd
 	}
 	return text
@@ -265,16 +266,55 @@ func (g *Generator) literalSQL(e expressions.Expression) string {
 
 func (g *Generator) escapeStr(text string) string {
 	if g.stringsSupportEscapedSequences {
-		// Base does not support escaped sequences, so this branch is only a placeholder for slice 5 dialects.
-		text = strings.ReplaceAll(text, "\\", "\\\\")
+		// Mirrors the default ESCAPED_SEQUENCES dialect table (dialects/dialect.py:66-90,
+		// 302-312): the inverse of UNESCAPED_SEQUENCES, filtered down to non-printable
+		// control characters plus backslash itself (printable characters round-trip as-is).
+		// No target dialect here overrides UNESCAPED_SEQUENCES (only clickhouse/snowflake
+		// do, out of scope), so the table is hardcoded rather than threading a new
+		// per-dialect field just for this. Only mysql sets StringEscapes['\\'], so this
+		// branch (and thus escapedSequences) is mysql-only among base/mysql/postgres.
+		var b strings.Builder
+		for i := 0; i < len(text); i++ {
+			c := text[i]
+			if esc, ok := escapedSequences[c]; ok {
+				b.WriteString(esc)
+			} else {
+				b.WriteByte(c)
+			}
+		}
+		text = b.String()
 	}
 	return strings.ReplaceAll(g.replaceLineBreaks(text), g.quoteEnd, g.escapedQuoteEnd)
 }
 
+// escapedSequences is the default ESCAPED_SEQUENCES table (dialects/dialect.py:66-90,
+// 302-312 UNESCAPED_SEQUENCES inverted, filtered to `not v.isprintable() or v == "\\"`).
+// See escapeStr for why this is hardcoded rather than a per-dialect field.
+var escapedSequences = map[byte]string{
+	'\a': `\a`,
+	'\b': `\b`,
+	'\f': `\f`,
+	'\n': `\n`,
+	'\r': `\r`,
+	'\t': `\t`,
+	'\v': `\v`,
+	'\\': `\\`,
+}
+
 func (g *Generator) placeholderSQL(e expressions.Expression) string {
 	if truthy(e.Arg("this")) {
+		// A named placeholder (:name). Postgres renders it in pyformat (psycopg) style as
+		// %(name)s (dialects/postgres.py placeholder_sql); base/mysql keep :name
+		// (NAMED_PLACEHOLDER_TOKEN=":", generator.py:3417-3418).
+		if g.dialect.Name == "postgres" {
+			return "%(" + e.Name() + ")s"
+		}
 		return ":" + e.Name()
 	}
+	// A bare `?` placeholder. Upstream parses it with jdbc=True, so even postgres renders it
+	// as `?` (the jdbc short-circuit in postgres.placeholder_sql). This port doesn't model the
+	// pyformat `%s` positional form (it never parses one), so a this-less Placeholder always
+	// originated from `?` and round-trips as `?` for every dialect.
 	return "?"
 }
 
@@ -388,6 +428,22 @@ func (g *Generator) escapeSQL(e expressions.Expression) string { return g.binary
 func (g *Generator) andSQL(e expressions.Expression) string { return g.connectorSQL(e, "AND", nil) }
 func (g *Generator) orSQL(e expressions.Expression) string  { return g.connectorSQL(e, "OR", nil) }
 
+// connectorOp maps a TraitConnector node to its SQL operator token, so the
+// flatten walk in connectorSQL renders each nested connector with its own
+// operator (mirroring upstream's getattr(self, f"{node.key}_sql") dispatch,
+// generator.py:4046) instead of assuming AND/OR. Only And/Or/Xor carry
+// TraitConnector; the default covers Or.
+func connectorOp(k expressions.Kind) string {
+	switch k {
+	case expressions.KindAnd:
+		return "AND"
+	case expressions.KindXor:
+		return "XOR"
+	default:
+		return "OR"
+	}
+}
+
 func (g *Generator) connectorSQL(e expressions.Expression, op string, stack *[]any) string {
 	if stack != nil {
 		if exprs := g.expressions(exprsOptions{expression: e, sep: " " + op + " "}); exprs != "" && truthy(e.Arg("expressions")) {
@@ -408,12 +464,7 @@ func (g *Generator) connectorSQL(e expressions.Expression, op string, stack *[]a
 		node := work[len(work)-1]
 		work = work[:len(work)-1]
 		if expr, ok := node.(expressions.Expression); ok && !isNilExpression(expr) && expr.Is(expressions.TraitConnector) {
-			var emitted string
-			if expr.Kind() == expressions.KindAnd {
-				emitted = g.connectorSQL(expr, "AND", &work)
-			} else {
-				emitted = g.connectorSQL(expr, "OR", &work)
-			}
+			emitted := g.connectorSQL(expr, connectorOp(expr.Kind()), &work)
 			ops[emitted] = true
 		} else {
 			sql := g.gen(node)
@@ -508,17 +559,18 @@ func (g *Generator) selectSQL(e expressions.Expression) string {
 	if expressionsSQL != "" {
 		expressionsSQL = g.sep() + expressionsSQL
 	}
-	// Deferred to slice 5 (dialects): base has SUPPORTS_SELECT_INTO=false, which upstream
-	// (generator.py:3302-3304, 3374-3381) rewrites `SELECT ... INTO x` into
-	// `CREATE TABLE x AS SELECT ...`. That rewrite reads an exp.Into node (this/temporary/
-	// unlogged), and the Into Kind is not ported yet; the base parser also rejects
-	// `SELECT ... INTO`, so this arg is never populated and the path is unreachable here.
-	// The keyed sql(expr,"into",comment=False)/sql(expr,"from_",comment=False) calls upstream
-	// still emit node comments: the keyed branch (generator.py:1101-1106) ignores the comment
-	// flag and recurses via sql(value) with comment=True, so we use sqlKey (comments on).
+	// SELECT ... INTO (generator.py:3302-3304, 3374-3381): postgres (SUPPORTS_SELECT_INTO)
+	// keeps the INTO inline; every other dialect drops it here and instead wraps the finished
+	// SELECT in `CREATE TABLE <into.this> AS ...` below. The keyed sql(expr,"into",...) call
+	// still recurses with comments on, so we use sqlKey when we do render it inline.
+	into := asExpression(e.Arg("into"))
+	intoInline := ""
+	if into != nil && g.dialect.SupportsSelectInto {
+		intoInline = g.sqlKey(e, "into")
+	}
 	sql := g.queryModifiers(e,
 		"SELECT"+top+hint+distinct+operationModifiers+kind+expressionsSQL,
-		g.sqlKey(e, "into"),
+		intoInline,
 		g.sqlKey(e, "from_"),
 	)
 	if truthy(e.Arg("with_")) {
@@ -526,6 +578,15 @@ func (g *Generator) selectSQL(e expressions.Expression) string {
 		e.PopComments()
 	}
 	sql = g.prependCtes(e, sql)
+	if into != nil && !g.dialect.SupportsSelectInto {
+		// generator.py:3374-3381: temporary -> " TEMPORARY", else "" (UNLOGGED is only kept
+		// under SUPPORTS_UNLOGGED_TABLES, which no base/mysql dialect sets, so it is dropped).
+		tableKind := ""
+		if boolValue(into.Arg("temporary")) {
+			tableKind = " TEMPORARY"
+		}
+		sql = "CREATE" + tableKind + " TABLE " + g.sqlKey(into, "this") + " AS " + sql
+	}
 	// Deferred to slice 5 (dialects): base has STAR_EXCLUDE_REQUIRES_DERIVED_TABLE=true, which
 	// upstream (generator.py:3368-3372) rewrites a select-level `exclude` arg into a derived
 	// table `SELECT * EXCLUDE (...) FROM (<subquery>)`. The base parser rejects select-level
@@ -1086,7 +1147,14 @@ func (g *Generator) windowSpecSQL(e expressions.Expression) string {
 	windowSpec := kind + " BETWEEN " + start + " AND " + end
 	exclude := g.sqlKey(e, "exclude")
 	if exclude != "" {
-		g.unsupported("EXCLUDE clause is not supported in the WINDOW clause")
+		// SUPPORTS_WINDOW_EXCLUDE (generator.py:512, generators/postgres.py:250): base
+		// defaults to unsupported (dropping EXCLUDE with a warning); postgres (like
+		// sqlite/oracle/duckdb upstream, out of scope here) renders it.
+		if g.dialect.Name == "postgres" {
+			windowSpec += " EXCLUDE " + exclude
+		} else {
+			g.unsupported("EXCLUDE clause is not supported in the WINDOW clause")
+		}
 	}
 	return windowSpec
 }
@@ -1135,7 +1203,15 @@ func (g *Generator) insertSQL(e expressions.Expression) string {
 	hint := g.sqlKey(e, "hint")
 	thisKeyword := " INTO"
 	if boolValue(e.Arg("overwrite")) {
-		thisKeyword = " OVERWRITE TABLE"
+		// A Directory target (Hive/Spark INSERT OVERWRITE [LOCAL] DIRECTORY ...)
+		// renders " OVERWRITE" without the TABLE keyword (generator.py insert_sql's
+		// isinstance(this, exp.Directory) special-case); an ordinary table target
+		// keeps " OVERWRITE TABLE".
+		if this := asExpression(e.Arg("this")); this != nil && this.Kind() == expressions.KindDirectory {
+			thisKeyword = " OVERWRITE"
+		} else {
+			thisKeyword = " OVERWRITE TABLE"
+		}
 	}
 	stored := g.sqlKey(e, "stored")
 	if stored != "" {
@@ -1240,7 +1316,84 @@ func (g *Generator) deleteSQL(e expressions.Expression) string {
 	return g.prependCtes(e, "DELETE"+hint+tables+expressionSQL)
 }
 
+// mergeWithoutTarget ports merge_without_target_sql (dialects/dialect.py:2057-2090), postgres's
+// exp.Merge generator transform (generators/postgres.py:337). It removes the target table (and
+// its alias) qualifier from column refs on the LHS of each WHEN ... UPDATE SET assignment and
+// from the INSERT column list, while leaving them intact in conditions and RHS values. It works
+// on a Copy so the caller's AST is not mutated (upstream mutates in place via .replace()).
+func (g *Generator) mergeWithoutTarget(e expressions.Expression) expressions.Expression {
+	e = e.Copy()
+	table := asExpression(e.Arg("this"))
+	if table == nil {
+		return e
+	}
+	// normalize returns the dialect-normalized name of an identifier for comparison only; it
+	// copies first because NormalizeIdentifier mutates its argument in place.
+	normalize := func(id expressions.Expression) string {
+		if id == nil {
+			return ""
+		}
+		return g.dialect.NormalizeIdentifier(id.Copy()).Name()
+	}
+	stripColumn := func(col expressions.Expression) expressions.Expression {
+		return expressions.Column(expressions.Args{"this": col.Arg("this")})
+	}
+	isTarget := func(col expressions.Expression) bool {
+		return col != nil && col.Kind() == expressions.KindColumn
+	}
+
+	targets := map[string]bool{normalize(asExpression(table.Arg("this"))): true}
+	if alias := asExpression(table.Arg("alias")); alias != nil {
+		targets[normalize(asExpression(alias.Arg("this")))] = true
+	}
+
+	whens := asExpression(e.Arg("whens"))
+	if whens == nil {
+		return e
+	}
+	for _, when := range whens.Expressions() {
+		then := asExpression(when.Arg("then"))
+		if then == nil {
+			continue
+		}
+		switch then.Kind() {
+		case expressions.KindUpdate:
+			for _, eq := range then.FindAll(expressions.KindEQ) {
+				lhs := asExpression(eq.Arg("this"))
+				if isTarget(lhs) && targets[normalize(asExpression(lhs.Arg("table")))] {
+					eq.Set("this", stripColumn(lhs))
+				}
+			}
+		case expressions.KindInsert:
+			columnList := asExpression(then.Arg("this"))
+			if columnList == nil || columnList.Kind() != expressions.KindTuple {
+				continue
+			}
+			cols := columnList.Expressions()
+			newCols := make([]expressions.Expression, len(cols))
+			changed := false
+			for i, col := range cols {
+				if isTarget(col) && targets[normalize(asExpression(col.Arg("table")))] {
+					newCols[i] = stripColumn(col)
+					changed = true
+				} else {
+					newCols[i] = col
+				}
+			}
+			if changed {
+				columnList.Set("expressions", newCols)
+			}
+		}
+	}
+	return e
+}
+
 func (g *Generator) mergeSQL(e expressions.Expression) string {
+	// Postgres removes the target table qualifier from WHEN clause columns (see
+	// mergeWithoutTarget); other dialects render the assignments verbatim.
+	if g.dialect.Name == "postgres" {
+		e = g.mergeWithoutTarget(e)
+	}
 	table := asExpression(e.Arg("this"))
 	this := g.gen(table)
 	using := "USING " + g.sqlKey(e, "using")
@@ -1291,11 +1444,17 @@ func (g *Generator) whenSQL(e expressions.Expression) string {
 			then = this
 		}
 	} else if thenExpression != nil && thenExpression.Kind() == expressions.KindUpdate {
-		expressionsSQL := g.expressions(exprsOptions{expression: thenExpression})
-		if expressionsSQL != "" {
-			then = "UPDATE SET" + g.sep() + expressionsSQL
+		// `WHEN MATCHED THEN UPDATE *` (a bare Star, not a SET list) renders `UPDATE *`
+		// (generator.py:4755-4756), not `UPDATE SET *`.
+		if star := asExpression(thenExpression.Arg("expressions")); star != nil && star.Kind() == expressions.KindStar {
+			then = "UPDATE " + g.sqlKey(thenExpression, "expressions")
 		} else {
-			then = "UPDATE"
+			expressionsSQL := g.expressions(exprsOptions{expression: thenExpression})
+			if expressionsSQL != "" {
+				then = "UPDATE SET" + g.sep() + expressionsSQL
+			} else {
+				then = "UPDATE"
+			}
 		}
 	} else {
 		then = g.gen(thenExpression)
@@ -1346,6 +1505,19 @@ func (g *Generator) returningSQL(e expressions.Expression) string {
 
 func (g *Generator) createSQL(e expressions.Expression) string {
 	kind := g.sqlKey(e, "kind")
+	// ddl cluster addition (generator.py:1306-1313): a CONSTRAINT TRIGGER (the
+	// `CREATE CONSTRAINT TRIGGER ...` postgres form) is stored with kind="TRIGGER" plus a
+	// TriggerProperties.constraint=true marker (parser/parser_ddl.go's trigger branch), and
+	// only re-adds the "CONSTRAINT " prefix here at generation time.
+	if kind == "TRIGGER" {
+		if props := asExpression(e.Arg("properties")); props != nil {
+			if exprs := listFromValue(props.Arg("expressions")); len(exprs) > 0 {
+				if first := asExpression(exprs[0]); first != nil && first.Kind() == expressions.KindTriggerProperties && boolValue(first.Arg("constraint")) {
+					kind = "CONSTRAINT " + kind
+				}
+			}
+		}
+	}
 	this := g.sqlKey(e, "this")
 	replace := ""
 	if boolValue(e.Arg("replace")) {
@@ -1368,6 +1540,14 @@ func (g *Generator) createSQL(e expressions.Expression) string {
 	if boolValue(e.Arg("begin")) {
 		begin = " BEGIN"
 	}
+	// ddl cluster addition: root_properties placement (generator.py:1319-1336). This port's
+	// property set is entirely POST_SCHEMA (or, for CREATE TRIGGER, POST_EXPRESSION with an
+	// always-empty expression - see generator/ddl_nodes.go propertiesSQL's doc comment), so
+	// it always renders immediately after `this` and before " AS <expression>".
+	propertiesSQL := g.sqlKey(e, "properties")
+	if propertiesSQL != "" {
+		propertiesSQL = " " + propertiesSQL
+	}
 	expressionSQL := g.sqlKey(e, "expression")
 	if expressionSQL != "" {
 		expressionSQL = " AS" + begin + g.sep() + expressionSQL
@@ -1376,7 +1556,7 @@ func (g *Generator) createSQL(e expressions.Expression) string {
 	if clone != "" {
 		clone = " " + clone
 	}
-	sql := "CREATE" + modifiers + " " + kind + concurrently + exists + " " + this + expressionSQL + clone
+	sql := "CREATE" + modifiers + " " + kind + concurrently + exists + " " + this + propertiesSQL + expressionSQL + clone
 	return g.prependCtes(e, sql)
 }
 
@@ -1778,9 +1958,18 @@ func (g *Generator) hexSQL(e expressions.Expression) string {
 
 func (g *Generator) arrayAggSQL(e expressions.Expression) string { return g.functionFallbackSQL(e) }
 
+// arraySizeSQL ports arraysize_sql (generator.py:5798-5811). ARRAY_SIZE_DIM_REQUIRED
+// (generator.py:588, generators/postgres.py:254) is nil/false for base (drop a `1`
+// dimension arg, warn on anything else), true for postgres (keep it, defaulting to `1`
+// when omitted) - modeled here as a dialect-name check, matching the existing
+// g.dialect.Name-gated overrides elsewhere in this package (e.g. varianceSQL).
 func (g *Generator) arraySizeSQL(e expressions.Expression) string {
 	dim := asExpression(e.Arg("expression"))
-	if dim != nil {
+	if g.dialect.Name == "postgres" {
+		if dim == nil {
+			dim = expressions.LiteralNumber(1)
+		}
+	} else if dim != nil {
 		if !(dim.IsInt() && dim.Name() == "1") {
 			g.unsupported("Cannot transpile dimension argument for ARRAY_LENGTH")
 		}
@@ -1797,12 +1986,74 @@ func (g *Generator) initcapSQL(e expressions.Expression) string {
 	return g.funcCall("INITCAP", []any{e.Arg("this"), delimiters}, "(", ")", true)
 }
 
+// dateAddSQL ports the base generator's generic dateadd_sql (generator.py:5158-5164) for
+// exp.DateAdd, plus MySQL's and Postgres's per-dialect overrides
+// (generators/mysql.py:74-83 date_add_sql("ADD"), generators/postgres.py:55-77
+// _date_add_sql("+")). Divergence from those overrides: upstream's dialect-specific
+// FUNCTIONS parser entry (build_date_delta_with_interval, parsers/mysql.py:114) flattens
+// `DATE_ADD(x, INTERVAL y UNIT)` at parse time into DateAdd(this=x, expression=y,
+// unit=Var(UNIT)); this port's DATE_ADD FUNCTIONS entry is still the generic positional
+// builder (expressions/functions.go genericFunction), so "expression" stays the whole
+// parsed Interval node and "unit" is never set on DateAdd directly. mysqlDateAddSQL/
+// postgresDateAddSQL below detect and unwrap that unflattened shape so the rendered SQL
+// still matches upstream byte-for-byte, without requiring the parser-side flattening
+// (out of this part's scope: dialect FUNCTIONS registries belong to a sibling part).
 func (g *Generator) dateAddSQL(e expressions.Expression) string {
+	switch g.dialect.Name {
+	case "mysql":
+		return g.mysqlDateAddSQL("ADD", e)
+	case "postgres":
+		return g.postgresDateAddSQL("+", e)
+	}
 	return g.funcCall("DATE_ADD", []any{e.Arg("this"), e.Arg("expression"), unitToStr(e)}, "(", ")", true)
 }
 
+// mysqlDateAddSQL ports date_add_sql (generators/mysql.py:74-83): reconstructs
+// `DATE_<kind>(this, INTERVAL <value> <unit>)` from the DateAdd's flattened
+// expression/unit. See dateAddSQL's comment for why this port's parse doesn't actually
+// flatten - dateIntervalArg below recovers the equivalent (this, unit) pair either way.
+func (g *Generator) mysqlDateAddSQL(kind string, e expressions.Expression) string {
+	value, unit := dateIntervalArg(e)
+	interval := expressions.Interval(expressions.Args{"this": value, "unit": unitToVarValue(unit)})
+	return g.funcCall("DATE_"+kind, []any{e.Arg("this"), interval}, "(", ")", true)
+}
+
+// postgresDateAddSQL ports _date_add_sql (generators/postgres.py:55-77), restricted to the
+// isinstance(e, exp.Interval) branch: the other branches simplify a non-Interval second
+// argument (a bare numeric day offset) via the optimizer's simplify() pass, which is out
+// of scope for the gap this part targets (no round-trip corpus case exercises it for
+// base/mysql/postgres). If the second argument isn't already an Interval, fall back to the
+// generic `DATE_ADD(...)` rendering rather than guessing at upstream's simplify output.
+func (g *Generator) postgresDateAddSQL(kind string, e expressions.Expression) string {
+	this := g.sqlKey(e, "this")
+	value, unit := dateIntervalArg(e)
+	if value == nil {
+		return g.funcCall("DATE_ADD", []any{e.Arg("this"), e.Arg("expression"), unitToStr(e)}, "(", ")", true)
+	}
+	interval := expressions.Interval(expressions.Args{"this": value, "unit": unit})
+	return this + " " + kind + " " + g.gen(interval)
+}
+
+// dateIntervalArg recovers the (value, unit) pair a DateAdd's "expression"/"unit" args
+// represent, regardless of whether they were flattened at parse time (upstream's shape:
+// unit set directly on DateAdd) or left as a single nested Interval (this port's shape,
+// see dateAddSQL's comment). Returns (nil, nil) if "expression" isn't an Interval and no
+// top-level "unit" was set, i.e. this port's parse produced neither shape.
+func dateIntervalArg(e expressions.Expression) (value any, unit expressions.Expression) {
+	if u := asExpression(e.Arg("unit")); u != nil {
+		return e.Arg("expression"), u
+	}
+	if iv := asExpression(e.Arg("expression")); iv != nil && iv.Kind() == expressions.KindInterval {
+		return iv.Arg("this"), asExpression(iv.Arg("unit"))
+	}
+	return nil, nil
+}
+
 func unitToStr(e expressions.Expression) expressions.Expression {
-	unit := asExpression(e.Arg("unit"))
+	return unitToStrValue(asExpression(e.Arg("unit")))
+}
+
+func unitToStrValue(unit expressions.Expression) expressions.Expression {
 	if unit == nil {
 		return expressions.LiteralString("DAY")
 	}
@@ -1810,6 +2061,26 @@ func unitToStr(e expressions.Expression) expressions.Expression {
 		return unit
 	}
 	return expressions.LiteralString(unit.Name())
+}
+
+// unitToVarValue ports unit_to_var (dialects/dialect.py:2017-2023): unlike unitToStrValue,
+// a Var/Placeholder/Column unit is kept as-is (not stringified), and a nil unit defaults to
+// a bare Var("DAY") rather than a string literal.
+func unitToVarValue(unit expressions.Expression) expressions.Expression {
+	if unit != nil {
+		switch unit.Kind() {
+		case expressions.KindVar, expressions.KindPlaceholder, expressions.KindColumn:
+			return unit
+		}
+	}
+	value := "DAY"
+	if unit != nil {
+		value = unit.Name()
+	}
+	if value == "" {
+		return nil
+	}
+	return expressions.Var(expressions.Args{"this": value})
 }
 
 func (g *Generator) logSQL(e expressions.Expression) string {
@@ -2016,6 +2287,14 @@ func (g *Generator) unnestSQL(e expressions.Expression) string {
 }
 
 func (g *Generator) bracketSQL(e expressions.Expression) string {
+	// Postgres's ARRAY[...] literal (parsed here as a Bracket subscripting a bare "ARRAY"
+	// column - see isArrayLiteralBracket) gets the same pretty dynamic line-wrap as
+	// upstream's inline_array_sql (dialects/dialect.py:1218-1219, generators/postgres.py:
+	// 502-509 array_sql), instead of the plain flat join every other Bracket use (real
+	// subscripting/slicing) gets.
+	if g.dialect.Name == "postgres" && isArrayLiteralBracket(e) {
+		return "ARRAY[" + g.expressions(exprsOptions{expression: e, dynamic: true, newLine: true, skipFirst: true, skipLast: true}) + "]"
+	}
 	// Base IndexOffset is 0, so apply_index_offset is unnecessary for slice 2.
 	exprs := listFromValue(e.Arg("expressions"))
 	sqls := make([]string, 0, len(exprs))
@@ -2023,6 +2302,32 @@ func (g *Generator) bracketSQL(e expressions.Expression) string {
 		sqls = append(sqls, g.gen(expr))
 	}
 	return g.sqlKey(e, "this") + "[" + strings.Join(sqls, ", ") + "]"
+}
+
+// isArrayLiteralBracket reports whether e is really an `ARRAY[...]` literal rather than a
+// subscript/slice: this port's parser doesn't build a dedicated exp.Array node for bracket
+// syntax (unlike upstream's build_array_constructor, parser.py:139-148 - out of this file's
+// scope), so `ARRAY[...]` parses as an ordinary Bracket subscripting a bare, unquoted "ARRAY"
+// column. That shape is never produced by genuine indexing (a real column literally named
+// "array" would need to be quoted, since ARRAY is a reserved word), so checking the "this"
+// column's name is a safe, generator-only way to recover the distinction upstream's parser
+// makes structurally.
+func isArrayLiteralBracket(e expressions.Expression) bool {
+	this := asExpression(e.Arg("this"))
+	if this == nil || this.Kind() != expressions.KindColumn {
+		return false
+	}
+	if this.Arg("table") != nil || this.Arg("db") != nil || this.Arg("catalog") != nil {
+		return false
+	}
+	ident := asExpression(this.Arg("this"))
+	if ident == nil {
+		return false
+	}
+	if quoted, _ := ident.Arg("quoted").(bool); quoted {
+		return false
+	}
+	return strings.EqualFold(ident.Name(), "ARRAY")
 }
 
 // intervalSQL ports interval_sql (generator.py:3910-3930). unit_expression carries the
@@ -2179,5 +2484,11 @@ func (g *Generator) blockSQL(e expressions.Expression) string {
 }
 
 func (g *Generator) hintSQL(e expressions.Expression) string {
-	return " /*+ " + strings.TrimSpace(g.expressions(exprsOptions{expression: e, sep: ", "})) + " */"
+	// QUERY_HINT_SEP: mysql joins hint items with a space (generators/mysql.py:138),
+	// base/postgres with ", " (generator.py:368).
+	sep := ", "
+	if g.dialect.Name == "mysql" {
+		sep = " "
+	}
+	return " /*+ " + strings.TrimSpace(g.expressions(exprsOptions{expression: e, sep: sep})) + " */"
 }

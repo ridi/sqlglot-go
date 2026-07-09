@@ -41,6 +41,72 @@ func TestIntervalSQLPostgresSingleString(t *testing.T) {
 	}
 }
 
+// TestIntervalUnitCurrentDate covers the interval-scoped NO_PAREN_FUNCTIONS accommodation
+// in parser_interval.go (parseIntervalSpan): `INTERVAL '-1' CURRENT_DATE` parses the unit
+// position as a bare Var("CURRENT_DATE") rather than failing to consume the token (which
+// previously left it to be misparsed as a trailing column alias -> "INTERVAL '-1' AS
+// CURRENT_DATE"). Confirmed against the pinned oracle:
+//
+//	PYTHONPATH=.reference/sqlglot-v30.12.0 python3 -c \
+//	  "import sqlglot; print(repr(sqlglot.parse_one(\"INTERVAL '-1' CURRENT_DATE\")))"
+//	Interval(this=Literal(this='-1', is_string=True), unit=CurrentDate())
+//	>>> sqlglot.parse_one("INTERVAL '-1' CURRENT_DATE").sql()
+//	"INTERVAL '-1' CURRENT_DATE"
+//
+// Only CURRENT_DATE is covered: upstream's other NO_PAREN_FUNCTIONS units that this
+// tokenizer actually produces (CURRENT_TIME/CURRENT_TIMESTAMP/CURRENT_USER) render with a
+// trailing "()" (e.g. "INTERVAL '1' CURRENT_TIMESTAMP()"), which the bare-Var
+// accommodation here doesn't reproduce - see intervalUnitNoParenTokens in
+// parser/parser_interval.go.
+func TestIntervalUnitCurrentDate(t *testing.T) {
+	sql := "INTERVAL '-1' CURRENT_DATE"
+	if got := roundTrip(t, "", sql); got != sql {
+		t.Errorf("%q ->\n  got  %q\n  want %q", sql, got, sql)
+	}
+}
+
+// TestDateAddMySQLCompoundUnit covers mysqlDateAddSQL (generator/sql.go), which reconstructs
+// `DATE_ADD(this, INTERVAL <value> <unit>)` from the DateAdd's expression/unit args
+// (including MySQL's DAY_HOUR-style compound units) instead of the base dateadd_sql's
+// generic `DATE_ADD(this, expression, 'unit')` shape. Every case here is an identity round
+// trip drawn from testdata/dialect_identity.jsonl, confirmed against the pinned oracle:
+//
+//	PYTHONPATH=.reference/sqlglot-v30.12.0 python3 -c \
+//	  "import sqlglot; print(sqlglot.parse_one('DATE_ADD(base_date, INTERVAL day_interval DAY_HOUR)', read='mysql').sql(dialect='mysql'))"
+//	DATE_ADD(base_date, INTERVAL day_interval DAY_HOUR)
+func TestDateAddMySQLCompoundUnit(t *testing.T) {
+	cases := []string{
+		"DATE_ADD(base_date, INTERVAL day_interval DAY_HOUR)",
+		"DATE_ADD(base_date, INTERVAL day_interval DAY_MICROSECOND)",
+		"DATE_ADD(base_date, INTERVAL day_interval YEAR_MONTH)",
+		"DATE_ADD(x, INTERVAL '1' YEAR)",
+	}
+	for _, sql := range cases {
+		if got := roundTrip(t, "mysql", sql); got != sql {
+			t.Errorf("mysql %q ->\n  got  %q\n  want %q", sql, got, sql)
+		}
+	}
+}
+
+// TestDateAddPostgresInterval covers postgresDateAddSQL (generator/sql.go): postgres
+// renders exp.DateAdd as `this + INTERVAL '<value> <unit>'` rather than a DATE_ADD(...)
+// call. This only closes the DateAdd half of testdata/parity_gaps.txt's postgres
+// "date_add(current_date, interval '7' day)" case - the CURRENT_DATE argument itself still
+// round-trips as a lowercase `current_date` column (this port has no CurrentDate Kind /
+// NO_PAREN_FUNCTIONS support yet, parser.go:1953 TODO(1d)), so that entry is exercised here
+// against a non-CURRENT_DATE `this` instead, confirmed against the pinned oracle:
+//
+//	PYTHONPATH=.reference/sqlglot-v30.12.0 python3 -c \
+//	  "import sqlglot; print(sqlglot.parse_one('SELECT date_add(x, interval \'7\' day)', read='postgres').sql(dialect='postgres'))"
+//	SELECT x + INTERVAL '7 DAY'
+func TestDateAddPostgresInterval(t *testing.T) {
+	got := roundTrip(t, "postgres", "SELECT date_add(x, interval '7' day)")
+	want := "SELECT x + INTERVAL '7 DAY'"
+	if got != want {
+		t.Errorf("postgres date_add ->\n  got  %q\n  want %q", got, want)
+	}
+}
+
 func TestIntervalSQLMySQLSingularUnit(t *testing.T) {
 	// mysql INTERVAL_ALLOWS_PLURAL_FORM=false: a plural unit (DAYS/HOURS/...) singularizes via
 	// timePartSingulars, independent of SINGLE_STRING_INTERVAL (mysql doesn't set that flag, so

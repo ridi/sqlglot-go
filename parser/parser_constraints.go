@@ -63,7 +63,16 @@ func init() {
 			return p.expression(exp.CommentColumnConstraint(exp.Args{"this": p.parseString()}), nil, nil)
 		},
 		"DEFAULT": func(p *Parser) exp.Expression {
-			return p.expression(exp.DefaultColumnConstraint(exp.Args{"this": p.parseBitwise()}), nil, nil)
+			// A bare CURRENT_TIMESTAMP-family default value (e.g. mysql's `DEFAULT
+			// CURRENT_TIMESTAMP`) needs the small local NO_PAREN_FUNCTIONS workaround below
+			// (see parseNoParenCurrentFunc) before falling back to the ordinary expression
+			// parser, which - lacking that support (parser.go:1952-1955 TODO(1d)) - would
+			// otherwise leave it as a bare column reference instead of a callable function.
+			this := p.parseNoParenCurrentFunc()
+			if this == nil {
+				this = p.parseBitwise()
+			}
+			return p.expression(exp.DefaultColumnConstraint(exp.Args{"this": this}), nil, nil)
 		},
 		"FOREIGN KEY": func(p *Parser) exp.Expression { return p.parseForeignKey() },
 		"GENERATED":   func(p *Parser) exp.Expression { return p.parseGeneratedAsIdentity() },
@@ -79,14 +88,20 @@ func init() {
 		"ON": func(p *Parser) exp.Expression {
 			index := p.index
 			if p.match(tokens.UPDATE) {
-				// `this` is required on OnUpdateColumnConstraint. The common no-paren value form
-				// (ON UPDATE CURRENT_TIMESTAMP) needs NO_PAREN_FUNCTIONS support, which isn't ported
-				// yet (parser.go:1867 TODO 1d), so parseFunction returns nil there. Building the node
-				// with a nil `this` would fail validation - swallowed as a Command by CREATE's
-				// tryParse, but a hard error on the non-tryParse ALTER MODIFY/CHANGE path. Instead
-				// retreat and decline the constraint so the statement degrades gracefully to a
-				// Command (matching CREATE's existing behavior for this deferred case).
-				if this := p.parseFunction(nil, false, true, false); this != nil {
+				// `this` is required on OnUpdateColumnConstraint. The common no-paren value
+				// form (ON UPDATE CURRENT_TIMESTAMP) needs the small local NO_PAREN_FUNCTIONS
+				// workaround below (parseNoParenCurrentFunc) before falling back to
+				// parseFunction, which - lacking that support (parser.go:1952-1955 TODO(1d)) -
+				// returns nil there. Building the node with a nil `this` would fail validation
+				// - swallowed as a Command by CREATE's tryParse, but a hard error on the
+				// non-tryParse ALTER MODIFY/CHANGE path. So if even the workaround comes up
+				// empty, retreat and decline the constraint, degrading gracefully to a Command
+				// (matching CREATE's existing behavior for this deferred case).
+				this := p.parseNoParenCurrentFunc()
+				if this == nil {
+					this = p.parseFunction(nil, false, true, false)
+				}
+				if this != nil {
 					return p.expression(exp.OnUpdateColumnConstraint(exp.Args{"this": this}), nil, nil)
 				}
 			}
@@ -567,18 +582,24 @@ func (p *Parser) parseNumber() exp.Expression {
 }
 
 // parseIndexParams ports _parse_index_params (parser.py:4573-4604): the trailing index-
-// parameter block on a PRIMARY KEY (e.g. its INCLUDE (...) clause). Like upstream it always
-// returns an exp.IndexParameters node - empty when no clause follows, which renders as "".
-// The `columns` branch (parser.py:4576-4579, _parse_with_operator) and the `with_storage`
-// branch (4583, _parse_wrapped_properties) are omitted: both are only reachable via
-// exp.ExcludeColumnConstraint (not ported in this slice), never from a PRIMARY KEY's include,
-// and depend on helpers this port lacks (documented 1:1 divergence). All the ported sub-
-// parsers guard on their leading keyword, so calling this after every PRIMARY KEY (as
-// parsePrimaryKey does, mirroring parser.py:7650) consumes nothing when absent.
+// parameter block on a PRIMARY KEY's INCLUDE (...) clause, and - via the ddl cluster's
+// CREATE INDEX support (parser_ddl.go) - a full `USING <method>(<columns>) ... WHERE
+// <predicate>` index definition. Like upstream it always returns an exp.IndexParameters node
+// - empty when no clause follows, which renders as "". The `with_storage` branch
+// (parser.py:4583, _parse_wrapped_properties) is omitted: it's only reachable via
+// exp.ExcludeColumnConstraint (not ported in this slice) or a genuine `WITH (...)`
+// storage-parameter clause on CREATE INDEX (absent from the base/mysql/postgres corpus -
+// documented 1:1 divergence). All the ported sub-parsers guard on their leading keyword, so
+// calling this after every PRIMARY KEY (as parsePrimaryKey does, mirroring parser.py:7650)
+// still consumes nothing when absent.
 func (p *Parser) parseIndexParams() exp.Expression {
 	var using exp.Expression
 	if p.match(tokens.USING) {
 		using = p.parseVar(true, nil, false)
+	}
+	var columns []exp.Expression
+	if p.match(tokens.L_PAREN, false) {
+		columns = p.parseWrappedCsv(p.parseWithOperator)
 	}
 	var include []exp.Expression
 	if p.matchTextSeq("INCLUDE") {
@@ -596,10 +617,82 @@ func (p *Parser) parseIndexParams() exp.Expression {
 	}
 	return p.expression(exp.IndexParameters(exp.Args{
 		"using":        using,
+		"columns":      columns,
 		"include":      include,
 		"partition_by": partitionBy,
 		"tablespace":   tablespace,
 		"where":        where,
 		"on":           on,
 	}), nil, nil)
+}
+
+// opclassFollowKeywords/optypeFollowTokens mirror OPCLASS_FOLLOW_KEYWORDS/
+// OPTYPE_FOLLOW_TOKENS (parser.py:1669,1671), used by parseOpclass below.
+var opclassFollowKeywords = map[string]bool{"ASC": true, "DESC": true, "NULLS": true, "WITH": true}
+var optypeFollowTokens = map[tokens.TokenType]bool{tokens.COMMA: true, tokens.R_PAREN: true}
+
+// parseIndexedColumn ports _parse_indexed_column (parser.py:9517-9518): an ordered opclass
+// column inside a CREATE INDEX column list.
+func (p *Parser) parseIndexedColumn() exp.Expression {
+	return p.parseOrdered(p.parseOpclass)
+}
+
+// parseWithOperator ports _parse_with_operator (parser.py:9520-9528) minus its trailing
+// `WITH <op>` branch (-> exp.WithOperator): that form (e.g. `col1 WITH &&`) is only
+// reachable via the EXCLUDE constraint, not ported in this slice (documented divergence - a
+// bare `WITH` after an index column is simply left unconsumed, degrading the enclosing
+// CREATE to a Command rather than building a structured WithOperator).
+func (p *Parser) parseWithOperator() exp.Expression {
+	return p.parseIndexedColumn()
+}
+
+// parseOpclass ports _parse_opclass (parser.py:4562-4571): disambiguates a plain ordered
+// column from `column opclass_name` (e.g. `title public.gin_trgm_ops`), used by postgres
+// CREATE INDEX column lists.
+func (p *Parser) parseOpclass() exp.Expression {
+	this := p.parseDisjunction()
+	if p.matchTexts(opclassFollowKeywords, false) {
+		return this
+	}
+	if !p.matchSet(optypeFollowTokens, false) {
+		return p.expression(exp.Opclass(exp.Args{
+			"this":       this,
+			"expression": p.parseTableParts(false, false, false, false),
+		}), nil, nil)
+	}
+	return this
+}
+
+// noParenFunctionTokens is the small subset of NO_PAREN_FUNCTIONS (parser.py:431-438) this
+// port's DEFAULT/ON UPDATE column-constraint values need: CURRENT_DATE/CURRENT_DATETIME/
+// CURRENT_TIME/CURRENT_TIMESTAMP/CURRENT_USER/CURRENT_ROLE used without trailing parens
+// (e.g. mysql's `DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP`). Wiring the full
+// NO_PAREN_FUNCTIONS dict into the general expression/function-call parser
+// (parser.go:1952-1955, explicitly marked `TODO(1d): NO_PAREN_FUNCTIONS CURRENT_*`) is out
+// of this slice's scope; parseNoParenCurrentFunc below is a narrow, local application to
+// just these two constraint values.
+var noParenFunctionTokens = map[tokens.TokenType]bool{
+	tokens.CURRENT_DATE: true, tokens.CURRENT_DATETIME: true, tokens.CURRENT_TIME: true,
+	tokens.CURRENT_TIMESTAMP: true, tokens.CURRENT_USER: true, tokens.CURRENT_ROLE: true,
+}
+
+// parseNoParenCurrentFunc builds the node a bare CURRENT_*-family keyword should produce in a
+// DEFAULT/ON UPDATE column-constraint value (see noParenFunctionTokens above), or returns nil
+// (consuming nothing) when curr isn't one of those tokens or is immediately followed by "(".
+// CURRENT_DATE/CURRENT_TIME map to their dedicated Kinds via noParenFunctions (matching the
+// no-paren keyword path in parseFunctionCall) so `DEFAULT CURRENT_DATE` renders bare
+// CURRENT_DATE and `DEFAULT CURRENT_TIME` renders CURRENT_TIME() - byte-for-byte with the
+// pinned oracle. The remaining family members (CURRENT_TIMESTAMP/CURRENT_USER/CURRENT_ROLE)
+// have no dedicated Kind yet, so they keep the zero-arg exp.Anonymous shape parseFunctionCall's
+// anonymous fallback also builds (e.g. `DEFAULT CURRENT_TIMESTAMP` -> CURRENT_TIMESTAMP()).
+func (p *Parser) parseNoParenCurrentFunc() exp.Expression {
+	if !noParenFunctionTokens[p.curr.TokenType] || p.next.TokenType == tokens.L_PAREN {
+		return nil
+	}
+	tok := p.curr
+	p.advance()
+	if build := noParenFunctions[tok.TokenType]; build != nil {
+		return p.expression(build(exp.Args{}), &tok, nil)
+	}
+	return p.expression(exp.Anonymous(exp.Args{"this": tok.Text, "expressions": []exp.Expression{}}), nil, nil)
 }

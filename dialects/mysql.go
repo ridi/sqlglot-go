@@ -1,6 +1,9 @@
 package dialects
 
-import "github.com/sjincho/sqlglot-go/tokens"
+import (
+	exp "github.com/sjincho/sqlglot-go/expressions"
+	"github.com/sjincho/sqlglot-go/tokens"
+)
 
 func MySQL() *Dialect {
 	d := Base()
@@ -33,6 +36,32 @@ func MySQL() *Dialect {
 	d.LockingReadsSupported = true
 	// generators/mysql.py:142 JSON_TYPE_REQUIRED_FOR_EXTRACTION = True.
 	d.JSONTypeRequiredForExtraction = true
+	// parsers/mysql.py:303 VALUES_FOLLOWED_BY_PAREN = False.
+	d.ValuesFollowedByParen = false
+	// parsers/mysql.py:304 SUPPORTS_PARTITION_SELECTION = True: allow `FROM t PARTITION(p0)`.
+	d.SupportsPartitionSelection = true
+	// generators/mysql.py:339 RESERVED_KEYWORDS: quote reserved words used as identifiers
+	// (e.g. `SELECT 1 AS row` -> SELECT 1 AS `row`). See dialects/mysql_reserved.go.
+	d.ReservedKeywords = mysqlReservedKeywords
+
+	// parsers/mysql.py:106-166 FUNCTIONS overlay. The DayOfMonth/DayOfWeek/DayOfYear/
+	// WeekOfYear and LCASE/UCASE spellings are base-scope upstream (auto-registered via each
+	// class's _sql_names), so they now live in the shared exp.FunctionByName singleton (base
+	// and postgres canonicalize them too); MySQL's own spelling is applied by the generator
+	// overrides (generator/dialect_funcs.go). What remains here is genuinely mysql-only:
+	// CURDATE/CURTIME (:110-112) and DATABASE/SCHEMA -> CurrentSchema (:134-135) - verified
+	// against the pinned oracle that base does NOT register those. INSTR -> StrPosition
+	// (parser.py:405) and TIME_STR_TO_UNIX (temporal.py:472) are also base-scope upstream but
+	// kept mysql-local for now (not needed to close any base/postgres parity gap; deferred to
+	// avoid changing base STR_POSITION/TIME_STR_TO_UNIX rendering that no fixture exercises).
+	d.Functions = map[string]func([]exp.Expression) exp.Expression{
+		"CURDATE":          exp.FromArgListFunc(exp.KindCurrentDate),
+		"CURTIME":          exp.FromArgListFunc(exp.KindCurrentTime),
+		"DATABASE":         exp.FromArgListFunc(exp.KindCurrentSchema),
+		"SCHEMA":           exp.FromArgListFunc(exp.KindCurrentSchema),
+		"INSTR":            exp.FromArgListFunc(exp.KindStrPosition),
+		"TIME_STR_TO_UNIX": exp.FromArgListFunc(exp.KindTimeStrToUnix),
+	}
 
 	for _, unit := range []string{
 		"SECOND_MICROSECOND",

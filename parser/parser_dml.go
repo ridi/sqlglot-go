@@ -9,23 +9,39 @@ import (
 
 func (p *Parser) parseInsert() exp.Expression {
 	keywordTok := p.prev
+	hint := p.parseHint()
 	overwrite := p.match(tokens.OVERWRITE)
 	ignore := p.match(tokens.IGNORE)
+	// LOCAL only ever precedes DIRECTORY (parser.py:3486-3502); matched unconditionally
+	// here (mirroring upstream), it's simply a no-op miss for the ordinary INTO/TABLE form.
+	local := p.matchTextSeq("LOCAL")
 	var alternative any
-	if p.match(tokens.OR) {
-		if p.matchTexts(insertAlternatives) {
-			alternative = p.prev.Text
-		}
-	}
-	p.match(tokens.INTO)
-	comments := p.prevComments
-	p.match(tokens.TABLE)
-	isFunction := p.match(tokens.FUNCTION)
+	var isFunction bool
 	var this exp.Expression
-	if isFunction {
-		this = p.parseFunction(nil, false, true, false)
+	var comments []string
+	if p.matchTextSeq("DIRECTORY") {
+		// Hive/Spark `INSERT OVERWRITE [LOCAL] DIRECTORY '<path>' [ROW FORMAT ...] <select>`
+		// (parser.py:3495-3502).
+		this = p.expression(exp.Directory(exp.Args{
+			"this":       p.parseVarOrString(false),
+			"local":      local,
+			"row_format": p.parseRowFormat(true),
+		}), nil, nil)
 	} else {
-		this = p.parseInsertTable()
+		if p.match(tokens.OR) {
+			if p.matchTexts(insertAlternatives) {
+				alternative = p.prev.Text
+			}
+		}
+		p.match(tokens.INTO)
+		comments = p.prevComments
+		p.match(tokens.TABLE)
+		isFunction = p.match(tokens.FUNCTION)
+		if isFunction {
+			this = p.parseFunction(nil, false, true, false)
+		} else {
+			this = p.parseInsertTable()
+		}
 	}
 	returning := p.parseReturning()
 	byName := p.matchTextSeq("BY", "NAME")
@@ -45,6 +61,7 @@ func (p *Parser) parseInsert() exp.Expression {
 	conflict := p.parseOnConflict()
 	returning = firstExpression(returning, p.parseReturning())
 	return p.expression(exp.Insert(exp.Args{
+		"hint":        hint,
 		"overwrite":   overwrite,
 		"ignore":      ignore,
 		"alternative": alternative,
@@ -69,7 +86,8 @@ func (p *Parser) parseInsertTable() exp.Expression {
 }
 
 func (p *Parser) parseUpdate() exp.Expression {
-	kwargs := exp.Args{"this": p.parseTable(false, true, updateAliasTokens, false, false, false, false)}
+	hint := p.parseHint()
+	kwargs := exp.Args{"hint": hint, "this": p.parseTable(false, true, updateAliasTokens, false, false, false, false)}
 	for p.curr.IsValid() {
 		switch {
 		case p.match(tokens.SET):
@@ -92,6 +110,7 @@ func (p *Parser) parseUpdate() exp.Expression {
 }
 
 func (p *Parser) parseDelete() exp.Expression {
+	hint := p.parseHint()
 	var tables []exp.Expression
 	tableNoJoin := func() exp.Expression { return p.parseTable(false, false, nil, false, false, false, false) }
 	tableWithJoins := func() exp.Expression { return p.parseTable(false, true, nil, false, false, false, false) }
@@ -114,6 +133,7 @@ func (p *Parser) parseDelete() exp.Expression {
 	order := p.parseOrder(nil, false)
 	limit := p.parseLimit(nil, false, false)
 	return p.expression(exp.Delete(exp.Args{
+		"hint":      hint,
 		"tables":    tables,
 		"this":      this,
 		"using":     using,
@@ -296,4 +316,102 @@ func (p *Parser) parseWhenMatched() exp.Expression {
 		whens = append(whens, p.expression(exp.When(exp.Args{"matched": matched, "source": source, "condition": condition, "then": then}), nil, nil))
 	}
 	return p.expression(exp.Whens(exp.Args{"expressions": whens}), nil, nil)
+}
+
+// parseRowFormat ports _parse_row_format (parser.py:3619-3651): the Hive `ROW FORMAT
+// DELIMITED ...` / `ROW FORMAT SERDE '...'` clause, reached here from parseInsert's
+// DIRECTORY branch with matchRow=true. The standalone CREATE-TABLE `ROW FORMAT ...`
+// property entry point (_parse_row, parser.py:3603-3606) isn't ported: this slice's
+// corpus never reaches parseRowFormat except via DIRECTORY.
+func (p *Parser) parseRowFormat(matchRow bool) exp.Expression {
+	if matchRow && !p.matchPair(tokens.ROW, tokens.FORMAT, true) {
+		return nil
+	}
+	if p.matchTextSeq("SERDE") {
+		return p.expression(exp.RowFormatSerdeProperty(exp.Args{
+			"this":             p.parseString(),
+			"serde_properties": p.parseSerdeProperties(false),
+		}), nil, nil)
+	}
+	p.matchTextSeq("DELIMITED")
+	args := exp.Args{}
+	if p.matchTextSeq("FIELDS", "TERMINATED", "BY") {
+		args["fields"] = p.parseString()
+		if p.matchTextSeq("ESCAPED", "BY") {
+			args["escaped"] = p.parseString()
+		}
+	}
+	if p.matchTextSeq("COLLECTION", "ITEMS", "TERMINATED", "BY") {
+		args["collection_items"] = p.parseString()
+	}
+	if p.matchTextSeq("MAP", "KEYS", "TERMINATED", "BY") {
+		args["map_keys"] = p.parseString()
+	}
+	if p.matchTextSeq("LINES", "TERMINATED", "BY") {
+		args["lines"] = p.parseString()
+	}
+	if p.matchTextSeq("NULL", "DEFINED", "AS") {
+		args["null"] = p.parseString()
+	}
+	return p.expression(exp.RowFormatDelimitedProperty(args), nil, nil)
+}
+
+// parseSerdeProperties ports _parse_serde_properties (parser.py:3608-3617): `[WITH]
+// SERDEPROPERTIES (...)`. SERDEPROPERTIES isn't a dedicated tokenizer keyword (unlike
+// upstream's TokenType.SERDE_PROPERTIES) - matchTextSeq matches it by text instead, which
+// is equivalent here since it's a single word with no ambiguity. The property-list body
+// (upstream's _parse_wrapped_properties, a generic Property-node parser) is deferred infra
+// (see parseProperties's stub note above); this parses each entry as a plain `key = value`
+// equality instead, which is sufficient to round-trip the common `'key'='value'` form and
+// is never exercised by this slice's corpus (no ROW FORMAT SERDE case appears in the
+// base/MySQL/Postgres round-trip corpus), so exact upstream Property-node fidelity isn't
+// required here.
+func (p *Parser) parseSerdeProperties(withKeyword bool) exp.Expression {
+	index := p.index
+	with_ := withKeyword || p.matchTextSeq("WITH")
+	if !p.matchTextSeq("SERDEPROPERTIES") {
+		p.retreat(index)
+		return nil
+	}
+	return p.expression(exp.SerdeProperties(exp.Args{
+		"expressions": p.parseWrappedCsv(p.parseEquality),
+		"with_":       with_,
+	}), nil, nil)
+}
+
+// tableIndexHintTokens/indexOrKeyTokens back parseTableHints below (mirroring upstream's
+// TABLE_INDEX_HINT_TOKENS, parser.py:1673, and the inline `_match_set((INDEX, KEY))`,
+// parser.py:4655).
+var tableIndexHintTokens = map[tokens.TokenType]bool{tokens.FORCE: true, tokens.IGNORE: true, tokens.USE: true}
+var indexOrKeyTokens = map[tokens.TokenType]bool{tokens.INDEX: true, tokens.KEY: true}
+
+// parseTableHints ports _parse_table_hints (parser.py:4636-4662): T-SQL `WITH (...)` table
+// hints and MySQL `USE|FORCE|IGNORE INDEX [FOR JOIN|ORDER BY|GROUP BY] (...)` index hints.
+// Called from parseTable, right after alias parsing (parser.py:4920).
+func (p *Parser) parseTableHints() []exp.Expression {
+	var hints []exp.Expression
+	if p.matchPair(tokens.WITH, tokens.L_PAREN, true) {
+		hints = append(hints, p.expression(exp.WithTableHint(exp.Args{
+			"expressions": p.parseCsv(func() exp.Expression {
+				if fn := p.parseFunction(nil, false, false, false); fn != nil {
+					return fn
+				}
+				return p.parseVar(true, nil, false)
+			}),
+		}), nil, nil))
+		p.matchRParen(nil)
+		return hints
+	}
+	for p.matchSet(tableIndexHintTokens) {
+		args := exp.Args{"this": stringsUpper(p.prev.Text)}
+		p.matchSet(indexOrKeyTokens)
+		if p.match(tokens.FOR) {
+			if tok := p.advanceAny(true); tok != nil {
+				args["target"] = stringsUpper(tok.Text)
+			}
+		}
+		args["expressions"] = p.parseWrappedIdVars()
+		hints = append(hints, p.expression(exp.IndexTableHint(args), nil, nil))
+	}
+	return hints
 }

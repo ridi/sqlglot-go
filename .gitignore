@@ -1,6 +1,7 @@
 # Pinned Python reference source (tobymao/sqlglot v30.12.0) — used by porting agents
-# as the 1:1 source of truth. Not part of the Go module; not committed.
-/.reference/
+# as the 1:1 source of truth. Not part of the Go module; not committed. No trailing slash
+# so a `.reference` symlink (as created in tooling worktrees) is ignored too, not just a dir.
+/.reference
 
 # Go
 *.test

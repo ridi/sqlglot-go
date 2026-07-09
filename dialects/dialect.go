@@ -42,6 +42,10 @@ type Dialect struct {
 	SupportsFixedSizeArrays  bool
 	SupportsLimitAll         bool
 	SupportsValuesDefault    bool
+	// SupportsSelectInto ports the generator flag SUPPORTS_SELECT_INTO (generator.py:466):
+	// when false (base/mysql), the generator rewrites `SELECT ... INTO x` into
+	// `CREATE TABLE x AS SELECT ...`; postgres (and tsql) keep the inline INTO.
+	SupportsSelectInto bool
 	// ValuesIsFunction ports the MySQL parser's FUNC_TOKENS addition of TokenType.VALUES
 	// (parsers/mysql.py:63-70) paired with its FUNCTION_PARSERS["VALUES"] override
 	// (parsers/mysql.py:158-160): `VALUES(col)` in `ON DUPLICATE KEY UPDATE` is an
@@ -193,6 +197,31 @@ type Dialect struct {
 	// when set, a string-literal `this` is wrapped in `CAST(... AS JSON)` before rendering the
 	// JSON_EXTRACT_SCALAR arrow form.
 	JSONTypeRequiredForExtraction bool
+	// Functions ports the per-dialect FUNCTIONS class attribute (parsers/mysql.py,
+	// parsers/postgres.py, etc.): a dialect-specific overlay of function-name -> builder
+	// entries, merged OVER exp.FunctionByName at parse time (see parser/parser.go's
+	// functions==nil merge site in parseFunctionCall). Unlike upstream - where every
+	// dialect's FUNCTIONS is `{**parser.Parser.FUNCTIONS, ...overrides}`, a single
+	// pre-merged class-level dict - this port keeps exp.FunctionByName as the one base map
+	// and each Dialect only carries its OWN additions/overrides here, merged in on demand.
+	// A nil/empty map (the base Dialect's zero value) means "no per-dialect overrides",
+	// so p.dialect.Functions is safe to index even when unset.
+	Functions map[string]func([]exp.Expression) exp.Expression
+	// ValuesFollowedByParen ports the parser flag of the same name (parser.py:1801): whether a
+	// bare VALUES keyword not immediately followed by "(" can be reparsed as a plain identifier
+	// (e.g. `SELECT values`, `values.c`). MySQL overrides to False (parsers/mysql.py:303),
+	// since MySQL treats VALUES specially even without a following paren.
+	ValuesFollowedByParen bool
+	// SupportsPartitionSelection ports the parser flag SUPPORTS_PARTITION_SELECTION
+	// (parser.py:1810, default False): whether a table source in FROM may carry a trailing
+	// PARTITION(...) selector, e.g. `SELECT * FROM t1 PARTITION(p0)`. MySQL overrides to True
+	// (parsers/mysql.py:304); base/postgres leave it False.
+	SupportsPartitionSelection bool
+	// ReservedKeywords ports the generator class var RESERVED_KEYWORDS (generator.py:790,
+	// empty for base/postgres; generators/mysql.py:339 for MySQL): unquoted identifiers whose
+	// lowercased name is in this set are quoted on generation (identifier_sql, generator.py:
+	// 1983). A nil/empty map (base's zero value) means "quote nothing extra".
+	ReservedKeywords map[string]bool
 }
 
 func Base() *Dialect {
@@ -306,6 +335,9 @@ func Base() *Dialect {
 		// (generators/mysql.py:142) and postgres (generators/postgres.py:245) both override to
 		// True.
 		JSONTypeRequiredForExtraction: false,
+		// parser.py:1801 VALUES_FOLLOWED_BY_PAREN = True (base); MySQL overrides to False
+		// (parsers/mysql.py:303).
+		ValuesFollowedByParen: true,
 	}
 }
 

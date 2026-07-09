@@ -1,6 +1,7 @@
 package parser
 
 import (
+	"github.com/sjincho/sqlglot-go/dialects"
 	exp "github.com/sjincho/sqlglot-go/expressions"
 	"github.com/sjincho/sqlglot-go/tokens"
 )
@@ -11,6 +12,29 @@ func seqGet[T any](s []T, i int) T {
 		return zero
 	}
 	return s[i]
+}
+
+// mergedDialectFunctions is the parseFunctionCall functions==nil default: exp.FunctionByName
+// overlaid with the current dialect's own Functions additions/overrides (dialects.Dialect.
+// Functions, e.g. mysql's CURDATE/DAY_OF_MONTH/LCASE/... cluster in dialects/mysql.go, or
+// postgres's CHAR_LENGTH/CHARACTER_LENGTH in dialects/postgres.go). Mirrors upstream's
+// per-dialect `FUNCTIONS = {**parser.Parser.FUNCTIONS, ...}` class-attribute pattern, just
+// merged on demand instead of once at class-definition time, since this port has one shared
+// exp.FunctionByName base map rather than a per-dialect-class copy. A dialect with no
+// Functions overlay (the common case) skips the merge entirely and returns the base map
+// as-is.
+func mergedDialectFunctions(d *dialects.Dialect) map[string]func([]exp.Expression) exp.Expression {
+	if len(d.Functions) == 0 {
+		return exp.FunctionByName
+	}
+	merged := make(map[string]func([]exp.Expression) exp.Expression, len(exp.FunctionByName)+len(d.Functions))
+	for name, builder := range exp.FunctionByName {
+		merged[name] = builder
+	}
+	for name, builder := range d.Functions {
+		merged[name] = builder
+	}
+	return merged
 }
 
 func (p *Parser) parseConvert(strict bool, safe any) exp.Expression {
@@ -96,6 +120,25 @@ func (p *Parser) parsePosition() exp.Expression {
 		return p.expression(exp.StrPosition(exp.Args{"this": p.parseBitwise(), "substr": seqGet(args, 0)}), nil, nil)
 	}
 	return p.expression(exp.StrPosition(exp.Args{"this": seqGet(args, 1), "substr": seqGet(args, 0), "position": seqGet(args, 2)}), nil, nil)
+}
+
+// parseOverlay ports _parse_overlay (parser.py:9786-9801): OVERLAY(<this> PLACING <expr>
+// [FROM <from>] [FOR <for>]); PLACING/FROM/FOR are each optional and interchangeable with a
+// plain comma in the same position (base FUNCTION_PARSERS entry, parser.py:1511 - not
+// dialect-gated, closes parity_gaps.txt gaps 196-197).
+func (p *Parser) parseOverlay() exp.Expression {
+	parseArg := func(text string) exp.Expression {
+		if p.match(tokens.COMMA) || p.matchTextSeq(text) {
+			return p.parseBitwise()
+		}
+		return nil
+	}
+	return p.expression(exp.Overlay(exp.Args{
+		"this":       p.parseBitwise(),
+		"expression": parseArg("PLACING"),
+		"from_":      parseArg("FROM"),
+		"for_":       parseArg("FOR"),
+	}), nil, nil)
 }
 
 func (p *Parser) parseSubstring() exp.Expression {
@@ -258,4 +301,35 @@ func (p *Parser) parseJSONTable() exp.Expression {
 		"error_handling": errorHandling,
 		"empty_handling": emptyHandling,
 	})
+}
+
+// init registers this file's FUNCTION_PARSERS/NO_PAREN_FUNCTION_PARSERS entries by plain key
+// assignment into the shared functionParsers/noParenFunctionParsers package vars (see the
+// package-var doc comments on statementParsers/dispatch for why this is safe regardless of
+// init() run order across files: parser.go's own init() only ever does a full map-literal
+// REASSIGNMENT of these two vars, and Go runs same-package init() funcs in lexical filename
+// order - "parser.go" sorts before "parser_functions.go" - so that reassignment always
+// completes before this file's key assignments run).
+func init() {
+	// OVERLAY is a base FUNCTION_PARSERS entry (parser.py:1511) - not dialect-gated.
+	functionParsers["OVERLAY"] = (*Parser).parseOverlay
+	// SUBSTR is MySQL-only upstream (parsers/mysql.py:162); gated in parseFunctionCall
+	// (parser.go, see the "Upstream FUNCTION_PARSERS is per-dialect" comment there) rather
+	// than here, since the gate lives alongside the sibling VALUES gate it mirrors.
+	functionParsers["SUBSTR"] = (*Parser).parseSubstring
+
+	// VARIADIC is postgres-only (parsers/postgres.py:142 NO_PAREN_FUNCTION_PARSERS). This
+	// port has no per-dialect NO_PAREN_FUNCTION_PARSERS table (same deferred-to-5b caveat as
+	// FUNC_TOKENS/FUNCTION_PARSERS elsewhere), so the shared entry gates itself at call time:
+	// parseFunctionCall already advanced past the VARIADIC token before invoking this closure,
+	// so a non-postgres dialect retreats back over it and returns nil, falling through to
+	// whatever ordinary primary/var parsing would have done had this entry never matched (e.g.
+	// treating a bare `VARIADIC` identifier as a column reference in base/mysql).
+	noParenFunctionParsers["VARIADIC"] = func(p *Parser) exp.Expression {
+		if p.dialect.Name != "postgres" {
+			p.retreat(p.index - 1)
+			return nil
+		}
+		return p.expression(exp.Variadic(exp.Args{"this": p.parseBitwise()}), nil, nil)
+	}
 }

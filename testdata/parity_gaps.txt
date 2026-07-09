@@ -1,163 +1,25 @@
 {"dialect":"","category":"gen: cast/type","sql":"SELECT CAST(x AS INT) /* comment */ FROM foo"}
-{"dialect":"","category":"gen: mismatch","sql":"INTERVAL '-1' CURRENT_DATE"}
 {"dialect":"","category":"gen: mismatch","sql":"SELECT FOO(x /* c */) /* FOO */, b /* b */"}
-{"dialect":"","category":"parse: Expected END after CASE","sql":"CASE WHEN TRUE THEN 1 ELSE interval END"}
-{"dialect":"","category":"parse: Expected ]","sql":"x[-4:-1]"}
-{"dialect":"","category":"parse: Expected ]","sql":"x[1:2]"}
-{"dialect":"","category":"parse: Expected ]","sql":"x[1:]"}
-{"dialect":"","category":"parse: Expected ]","sql":"x[:2]"}
-{"dialect":"","category":"parse: Expected ]","sql":"x[:]"}
-{"dialect":"","category":"parse: Expecting )","sql":"CACHE LAZY TABLE x OPTIONS(N'storageLevel' = 'value')"}
-{"dialect":"","category":"parse: Invalid expression / Unexpected token","sql":"INSERT INTO a.b PARTITION(DAY = '2024-04-14') (col1, col2) SELECT x FROM y"}
-{"dialect":"","category":"parse: Invalid expression / Unexpected token","sql":"INSERT OVERWRITE DIRECTORY 'x' SELECT 1"}
-{"dialect":"","category":"parse: Invalid expression / Unexpected token","sql":"INSERT OVERWRITE LOCAL DIRECTORY 'x' ROW FORMAT DELIMITED FIELDS TERMINATED BY '1' COLLECTION ITEMS TERMINATED BY '2' MAP KEYS TERMINATED BY '3' LINES TERMINATED BY '4' NULL DEFINED AS '5' SELECT 1"}
-{"dialect":"","category":"parse: Invalid expression / Unexpected token","sql":"INSERT OVERWRITE LOCAL DIRECTORY 'x' SELECT 1"}
-{"dialect":"","category":"parse: Invalid expression / Unexpected token","sql":"INSERT OVERWRITE TABLE a.b PARTITION(ds = 'YYYY-MM-DD') SELECT x FROM y"}
-{"dialect":"","category":"parse: Invalid expression / Unexpected token","sql":"INSERT OVERWRITE TABLE a.b PARTITION(ds = 'YYYY-MM-DD', hour = 'hh') SELECT x FROM y"}
-{"dialect":"","category":"parse: Invalid expression / Unexpected token","sql":"INSERT OVERWRITE TABLE a.b PARTITION(ds) SELECT x FROM y"}
-{"dialect":"","category":"parse: Invalid expression / Unexpected token","sql":"INSERT OVERWRITE TABLE a.b PARTITION(ds, hour) SELECT x FROM y"}
-{"dialect":"","category":"parse: Invalid expression / Unexpected token","sql":"N'abc'"}
-{"dialect":"","category":"parse: Invalid expression / Unexpected token","sql":"SELECT 'Ac' ILIKE 'a%c' ESCAPE NULL"}
 {"dialect":"","category":"parse: Invalid expression / Unexpected token","sql":"SELECT (LEAD(foo1, 1, 0)) OVER (PARTITION BY foo2 ORDER BY foo3) FROM t"}
-{"dialect":"","category":"parse: Invalid expression / Unexpected token","sql":"SELECT * FROM a JOIN b JOIN c USING (id) USING (id)"}
-{"dialect":"","category":"parse: Invalid expression / Unexpected token","sql":"SELECT /*+ REBALANCE */ * FROM foo"}
-{"dialect":"","category":"parse: Invalid expression / Unexpected token","sql":"SELECT /*+ SOME_HINT(foo) */ 1"}
-{"dialect":"","category":"parse: Invalid expression / Unexpected token","sql":"SELECT 1 FROM a JOIN b JOIN c ON b.id = c.id ON a.id = b.id"}
-{"dialect":"","category":"parse: Invalid expression / Unexpected token","sql":"SELECT :hello, ? FROM x LIMIT :my_limit"}
-{"dialect":"","category":"parse: Invalid expression / Unexpected token","sql":"SELECT NUMRANGE(1.1, 2.2) -|- NUMRANGE(2.2, 3.3)"}
-{"dialect":"","category":"parse: Invalid expression / Unexpected token","sql":"SELECT a FROM x WHERE a COLLATE 'utf8_general_ci' = 'b'"}
-{"dialect":"","category":"parse: Invalid expression / Unexpected token","sql":"SELECT values"}
-{"dialect":"","category":"parse: Invalid expression / Unexpected token","sql":"SELECT values AS values FROM t WHERE values + 1 > 3"}
-{"dialect":"","category":"parse: Invalid expression / Unexpected token","sql":"a OVERLAPS b"}
-{"dialect":"","category":"parse: Invalid expression / Unexpected token","sql":"x GLOB '??-*'"}
-{"dialect":"","category":"parse: Invalid expression / Unexpected token","sql":"x GLOB y"}
-{"dialect":"","category":"parse: Invalid expression / Unexpected token","sql":"x ILIKE '%y%' ESCAPE '\\'"}
-{"dialect":"","category":"parse: Invalid expression / Unexpected token","sql":"x IS TRUE IS TRUE"}
-{"dialect":"","category":"parse: Invalid expression / Unexpected token","sql":"x LIKE '%y%' ESCAPE '\\'"}
-{"dialect":"","category":"parse: Invalid expression / Unexpected token","sql":"~x"}
-{"dialect":"","category":"parse: Required keyword","sql":"FOO(values.c)"}
-{"dialect":"","category":"parse: Required keyword","sql":"SELECT if.x"}
-{"dialect":"","category":"parse: Required keyword","sql":"values"}
-{"dialect":"","category":"parse: Required keyword","sql":"x << 1"}
-{"dialect":"","category":"parse: Required keyword","sql":"x >> 1"}
-{"dialect":"","category":"parse: Required keyword","sql":"x >> 1 | 1 & 1 ^ 1"}
-{"dialect":"mysql","category":"gen: mismatch","sql":"'\t'"}
 {"dialect":"mysql","category":"gen: mismatch","sql":"'\\\\\"a'"}
-{"dialect":"mysql","category":"gen: mismatch","sql":"CREATE FUNCTION f () RETURNS VARCHAR LANGUAGE SQL SQL SECURITY INVOKER SELECT 'abc'"}
-{"dialect":"mysql","category":"gen: mismatch","sql":"CREATE TABLE t (c DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP) DEFAULT CHARSET=utf8 ROW_FORMAT=DYNAMIC"}
-{"dialect":"mysql","category":"gen: mismatch","sql":"DATE_ADD(base_date, INTERVAL day_interval DAY_HOUR)"}
-{"dialect":"mysql","category":"gen: mismatch","sql":"DATE_ADD(base_date, INTERVAL day_interval DAY_MICROSECOND)"}
-{"dialect":"mysql","category":"gen: mismatch","sql":"DATE_ADD(base_date, INTERVAL day_interval DAY_MINUTE)"}
-{"dialect":"mysql","category":"gen: mismatch","sql":"DATE_ADD(base_date, INTERVAL day_interval DAY_SECOND)"}
-{"dialect":"mysql","category":"gen: mismatch","sql":"DATE_ADD(base_date, INTERVAL day_interval HOUR_MICROSECOND)"}
-{"dialect":"mysql","category":"gen: mismatch","sql":"DATE_ADD(base_date, INTERVAL day_interval HOUR_MINUTE)"}
-{"dialect":"mysql","category":"gen: mismatch","sql":"DATE_ADD(base_date, INTERVAL day_interval HOUR_SECOND)"}
-{"dialect":"mysql","category":"gen: mismatch","sql":"DATE_ADD(base_date, INTERVAL day_interval MINUTE_MICROSECOND)"}
-{"dialect":"mysql","category":"gen: mismatch","sql":"DATE_ADD(base_date, INTERVAL day_interval MINUTE_SECOND)"}
-{"dialect":"mysql","category":"gen: mismatch","sql":"DATE_ADD(base_date, INTERVAL day_interval SECOND_MICROSECOND)"}
-{"dialect":"mysql","category":"gen: mismatch","sql":"DATE_ADD(base_date, INTERVAL day_interval YEAR_MONTH)"}
-{"dialect":"mysql","category":"gen: mismatch","sql":"DATE_ADD(x, INTERVAL '1' YEAR)"}
-{"dialect":"mysql","category":"gen: mismatch","sql":"SELECT * FROM t1 PARTITION(p0)"}
-{"dialect":"mysql","category":"gen: mismatch","sql":"SELECT 1 AS row"}
-{"dialect":"mysql","category":"gen: mismatch","sql":"SELECT CURTIME()"}
-{"dialect":"mysql","category":"gen: mismatch","sql":"SELECT DAY_OF_MONTH('2023-01-01')"}
-{"dialect":"mysql","category":"gen: mismatch","sql":"SELECT DAY_OF_WEEK('2023-01-01')"}
-{"dialect":"mysql","category":"gen: mismatch","sql":"SELECT DAY_OF_YEAR('2023-01-01')"}
-{"dialect":"mysql","category":"gen: mismatch","sql":"SELECT INSTR('str', 'substr')"}
-{"dialect":"mysql","category":"gen: mismatch","sql":"SELECT LCASE('foo')"}
-{"dialect":"mysql","category":"gen: mismatch","sql":"SELECT UCASE('foo')"}
-{"dialect":"mysql","category":"gen: mismatch","sql":"SELECT WEEK_OF_YEAR('2023-01-01')"}
-{"dialect":"mysql","category":"gen: mismatch","sql":"TRUNC(3.14159, 2)"}
-{"dialect":"mysql","category":"parse: Expected table name but got <Token token_type","sql":"DELETE /*+ MAX_EXECUTION_TIME(1) */ FROM t WHERE a = 1"}
-{"dialect":"mysql","category":"parse: Expected table name but got <Token token_type","sql":"UPDATE /*+ MAX_EXECUTION_TIME(1) */ t SET a = 1"}
-{"dialect":"mysql","category":"parse: Expecting )","sql":"SELECT SUBSTR(1 FROM 2 FOR 3)"}
 {"dialect":"mysql","category":"parse: Invalid expression / Unexpected token","sql":"@@GLOBAL.max_connections"}
-{"dialect":"mysql","category":"parse: Invalid expression / Unexpected token","sql":"DELETE FROM t FORCE INDEX (idx) WHERE a > 5 ORDER BY id"}
-{"dialect":"mysql","category":"parse: Invalid expression / Unexpected token","sql":"SELECT 'ab' MEMBER OF('[23, \"abc\", 17, \"ab\", 10]')"}
-{"dialect":"mysql","category":"parse: Invalid expression / Unexpected token","sql":"SELECT 'foo' NOT SOUNDS LIKE 'bar'"}
-{"dialect":"mysql","category":"parse: Invalid expression / Unexpected token","sql":"SELECT 'foo' SOUNDS LIKE 'bar'"}
-{"dialect":"mysql","category":"parse: Invalid expression / Unexpected token","sql":"SELECT * FROM foo WHERE 'ab' MEMBER OF(content)"}
-{"dialect":"mysql","category":"parse: Invalid expression / Unexpected token","sql":"SELECT * FROM foo WHERE 3 MEMBER OF(JSON_EXTRACT(info, '$.value'))"}
-{"dialect":"mysql","category":"parse: Invalid expression / Unexpected token","sql":"SELECT * FROM foo WHERE 3 MEMBER OF(info->'$.value')"}
-{"dialect":"mysql","category":"parse: Invalid expression / Unexpected token","sql":"SELECT * FROM t1 USE INDEX () IGNORE INDEX (i2) USE INDEX (i1) USE INDEX (i2)"}
-{"dialect":"mysql","category":"parse: Invalid expression / Unexpected token","sql":"SELECT * FROM t1 USE INDEX (i1) IGNORE INDEX FOR ORDER BY (i2) ORDER BY a"}
-{"dialect":"mysql","category":"parse: Invalid expression / Unexpected token","sql":"SELECT * FROM t1 USE INDEX (i1) USE INDEX (i1, i1)"}
-{"dialect":"mysql","category":"parse: Invalid expression / Unexpected token","sql":"SELECT * FROM t1 USE INDEX FOR JOIN (i1) FORCE INDEX FOR JOIN (i2)"}
-{"dialect":"mysql","category":"parse: Invalid expression / Unexpected token","sql":"SELECT * FROM table1 IGNORE INDEX (col3_index) WHERE col1 = 1 AND col2 = 2 AND col3 = 3"}
-{"dialect":"mysql","category":"parse: Invalid expression / Unexpected token","sql":"SELECT * FROM table1 USE INDEX (col1_index, col2_index) WHERE col1 = 1 AND col2 = 2 AND col3 = 3"}
 {"dialect":"mysql","category":"parse: Invalid expression / Unexpected token","sql":"SELECT * FROM x ORDER BY BINARY a"}
-{"dialect":"mysql","category":"parse: Invalid expression / Unexpected token","sql":"SELECT /*+ BKA(t1) NO_BKA(t2) */ * FROM t1 INNER JOIN t2"}
-{"dialect":"mysql","category":"parse: Invalid expression / Unexpected token","sql":"SELECT /*+ INDEX(t, i) */ c1 FROM t WHERE c2 = 'value'"}
-{"dialect":"mysql","category":"parse: Invalid expression / Unexpected token","sql":"SELECT /*+ MERGE(dt) */ * FROM (SELECT * FROM t1) AS dt"}
-{"dialect":"mysql","category":"parse: Invalid expression / Unexpected token","sql":"SELECT 1 && 0"}
-{"dialect":"mysql","category":"parse: Invalid expression / Unexpected token","sql":"SELECT 1 XOR 0"}
-{"dialect":"mysql","category":"parse: Invalid expression / Unexpected token","sql":"SELECT @a MEMBER OF(@c), @b MEMBER OF(@c)"}
 {"dialect":"mysql","category":"parse: Invalid expression / Unexpected token","sql":"SELECT @var1 := 1, @var2"}
 {"dialect":"mysql","category":"parse: Invalid expression / Unexpected token","sql":"SELECT @var1 := COUNT(*) FROM t1"}
 {"dialect":"mysql","category":"parse: Invalid expression / Unexpected token","sql":"SELECT @var1, @var2 := @var1"}
-{"dialect":"mysql","category":"parse: Invalid expression / Unexpected token","sql":"SELECT CAST('[4,5]' AS JSON) MEMBER OF('[[3,4],[4,5]]')"}
 {"dialect":"mysql","category":"parse: Invalid expression / Unexpected token","sql":"SELECT CHARSET(CHAR(100 USING utf8))"}
-{"dialect":"mysql","category":"parse: Invalid expression / Unexpected token","sql":"SELECT HIGH_PRIORITY STRAIGHT_JOIN SQL_CALC_FOUND_ROWS * FROM t"}
-{"dialect":"mysql","category":"parse: Invalid expression / Unexpected token","sql":"SELECT JSON_ARRAY(4, 5) MEMBER OF('[[3,4],[4,5]]')"}
-{"dialect":"mysql","category":"parse: Invalid expression / Unexpected token","sql":"SELECT a || b"}
-{"dialect":"mysql","category":"parse: Required keyword","sql":"DATABASE()"}
-{"dialect":"mysql","category":"parse: Required keyword","sql":"MOD(x, y)"}
 {"dialect":"mysql","category":"parse: Required keyword","sql":"SELECT CHAR(0xC3A9 USING `utf8mb4`)"}
-{"dialect":"postgres","category":"gen: cast/type","sql":"\n            CREATE INDEX index_ci_builds_on_commit_id_and_artifacts_expireatandidpartial\n            ON public.ci_builds\n            USING btree (commit_id, artifacts_expire_at, id)\n            WHERE (\n                ((type)::text = 'Ci::Build'::text)\n                AND ((retried = false) OR (retried IS NULL))\n                AND ((name)::text = ANY (ARRAY[\n                    ('sast'::character varying)::text,\n                    ('dependency_scanning'::character varying)::text,\n                    ('sast:container'::character varying)::text,\n                    ('container_scanning'::character varying)::text,\n                    ('dast'::character varying)::text\n                ]))\n            )\n            "}
-{"dialect":"postgres","category":"gen: cast/type","sql":"CREATE OR REPLACE FUNCTION function_name (input_a character varying DEFAULT NULL::character varying)"}
 {"dialect":"postgres","category":"gen: cast/type","sql":"SELECT DATE_PART('isodow'::varchar(6), current_date)"}
-{"dialect":"postgres","category":"gen: mismatch","sql":"ARRAY[x,x,x,x,x,x,x,x,x,x,x,x,x,x,x,x,x,x,x,x,x,x,x,x,x,x,x,x]"}
-{"dialect":"postgres","category":"gen: mismatch","sql":"CHARACTER_LENGTH(x)"}
-{"dialect":"postgres","category":"gen: mismatch","sql":"CHAR_LENGTH(x)"}
-{"dialect":"postgres","category":"gen: mismatch","sql":"CREATE FUNCTION add(integer, integer) RETURNS integer AS 'select $1 + $2;' LANGUAGE SQL IMMUTABLE CALLED ON NULL INPUT"}
-{"dialect":"postgres","category":"gen: mismatch","sql":"CREATE FUNCTION x(INT) RETURNS INT SET search_path TO 'public'"}
-{"dialect":"postgres","category":"gen: mismatch","sql":"CREATE TRIGGER proc_trigger BEFORE INSERT ON users FOR EACH ROW EXECUTE PROCEDURE LOG_CHANGES()"}
-{"dialect":"postgres","category":"gen: mismatch","sql":"MERGE INTO x USING (SELECT id) AS y ON a = b WHEN MATCHED THEN UPDATE SET x.a = y.b WHEN NOT MATCHED THEN INSERT (a, b) VALUES (y.a, y.b)"}
-{"dialect":"postgres","category":"gen: mismatch","sql":"SELECT ARRAY_LENGTH(ARRAY[1, 2, 3], 1)"}
-{"dialect":"postgres","category":"gen: mismatch","sql":"SELECT date_add(current_date, interval '7' day)"}
-{"dialect":"postgres","category":"gen: mismatch","sql":"select count() OVER(partition by a order by a range offset preceding exclude current row)"}
-{"dialect":"postgres","category":"generate: error","sql":"WITH t(c) AS (SELECT 1) SELECT * INTO UNLOGGED foo FROM (SELECT c AS c FROM t) AS temp"}
 {"dialect":"postgres","category":"parse: Expected AS after CAST","sql":"SELECT CAST(e'\\176' AS BYTEA)"}
-{"dialect":"postgres","category":"parse: Expecting )","sql":"SELECT * FROM schema_name.table_name st WHERE JSON_EXTRACT_PATH_TEXT((st.data)::json, variadic array['test'::text]) = 'test'::text"}
 {"dialect":"postgres","category":"parse: Expecting )","sql":"SELECT 1 FROM ((VALUES (1)) AS vals(id) LEFT OUTER JOIN tbl ON vals.id = tbl.id)"}
-{"dialect":"postgres","category":"parse: Expecting )","sql":"SELECT MLEAST(VARIADIC ARRAY[10, -1, 5, 4.4])"}
-{"dialect":"postgres","category":"parse: Expecting )","sql":"SELECT MLEAST(VARIADIC ARRAY[]::numeric[])"}
-{"dialect":"postgres","category":"parse: Expecting )","sql":"SELECT OVERLAY(a PLACING b FROM 1 FOR 1)"}
-{"dialect":"postgres","category":"parse: Expecting )","sql":"SELECT OVERLAY(a PLACING b FROM 1)"}
 {"dialect":"postgres","category":"parse: Expecting )","sql":"SELECT p1.id, p2.id, v1, v2 FROM polygons AS p1, polygons AS p2, LATERAL VERTICES(p1.poly) v1, LATERAL VERTICES(p2.poly) v2 WHERE (v1 <-> v2) < 10 AND p1.id <> p2.id"}
 {"dialect":"postgres","category":"parse: Invalid expression / Unexpected token","sql":"'x' 'y' 'z'"}
-{"dialect":"postgres","category":"parse: Invalid expression / Unexpected token","sql":"ARRAY[1, 2, 3] && ARRAY[1, 2]"}
-{"dialect":"postgres","category":"parse: Invalid expression / Unexpected token","sql":"SELECT '[\"a\", \"b\"]'::jsonb ?& array['a', 'b']"}
-{"dialect":"postgres","category":"parse: Invalid expression / Unexpected token","sql":"SELECT '[\"a\", {\"b\":1}]'::jsonb #- '{1,b}'"}
-{"dialect":"postgres","category":"parse: Invalid expression / Unexpected token","sql":"SELECT '{\"a\":1, \"b\":2, \"c\":3}'::jsonb ?| array['b', 'c']"}
-{"dialect":"postgres","category":"parse: Invalid expression / Unexpected token","sql":"SELECT * FROM ROWS FROM (FUNC1(col1) AS alias1(\"col1\" TEXT), FUNC2(col2) AS alias2(\"col2\" INT)) WITH ORDINALITY"}
-{"dialect":"postgres","category":"parse: Invalid expression / Unexpected token","sql":"SELECT * FROM ROWS FROM (FUNC1(col1, col2))"}
-{"dialect":"postgres","category":"parse: Invalid expression / Unexpected token","sql":"SELECT * FROM events WHERE doc @? '$.a[*] ? (@ > 2)'"}
-{"dialect":"postgres","category":"parse: Invalid expression / Unexpected token","sql":"SELECT * FROM table1, ROWS FROM (FUNC1(col1) AS alias1(\"col1\" TEXT)) WITH ORDINALITY AS alias3(\"col3\" INT, \"col4\" TEXT)"}
-{"dialect":"postgres","category":"parse: Invalid expression / Unexpected token","sql":"SELECT ARRAY[1, 2, 3] <@ ARRAY[1, 2]"}
-{"dialect":"postgres","category":"parse: Invalid expression / Unexpected token","sql":"SELECT NUMRANGE(1.1, 2.2) -|- NUMRANGE(2.2, 3.3)"}
 {"dialect":"postgres","category":"parse: Invalid expression / Unexpected token","sql":"SELECT a <<->> b"}
-{"dialect":"postgres","category":"parse: Invalid expression / Unexpected token","sql":"SELECT c.oid, n.nspname, c.relname FROM pg_catalog.pg_class AS c LEFT JOIN pg_catalog.pg_namespace AS n ON n.oid = c.relnamespace WHERE c.relname OPERATOR(pg_catalog.~) '^(courses)$' COLLATE pg_catalog.default AND pg_catalog.PG_TABLE_IS_VISIBLE(c.oid) ORDER BY 2, 3"}
 {"dialect":"postgres","category":"parse: Invalid expression / Unexpected token","sql":"SELECT e'\\n'"}
 {"dialect":"postgres","category":"parse: Invalid expression / Unexpected token","sql":"SELECT e'\\t'"}
 {"dialect":"postgres","category":"parse: Invalid expression / Unexpected token","sql":"SELECT e'\\xDEADBEEF'"}
 {"dialect":"postgres","category":"parse: Invalid expression / Unexpected token","sql":"SELECT e'foo \\' bar'"}
 {"dialect":"postgres","category":"parse: Invalid expression / Unexpected token","sql":"SELECT e'update table_name set a = \\'foo\\' where 1 = 0' AS x FROM tab"}
-{"dialect":"postgres","category":"parse: Invalid expression / Unexpected token","sql":"SELECT id, email, CAST(deleted AS TEXT) FROM users WHERE deleted NOTNULL"}
-{"dialect":"postgres","category":"parse: Invalid expression / Unexpected token","sql":"SELECT js, js IS JSON ARRAY WITH UNIQUE KEYS AS \"array w. UK?\", js IS JSON ARRAY WITHOUT UNIQUE KEYS AS \"array w/o UK?\", js IS JSON ARRAY UNIQUE KEYS AS \"array w UK 2?\" FROM t"}
-{"dialect":"postgres","category":"parse: Invalid expression / Unexpected token","sql":"SELECT js, js IS JSON AS \"json?\", js IS JSON VALUE AS \"scalar?\", js IS JSON SCALAR AS \"scalar?\", js IS JSON OBJECT AS \"object?\", js IS JSON ARRAY AS \"array?\" FROM t"}
-{"dialect":"postgres","category":"parse: Invalid expression / Unexpected token","sql":"SELECT ~x"}
-{"dialect":"postgres","category":"parse: Invalid expression / Unexpected token","sql":"a #- b"}
-{"dialect":"postgres","category":"parse: Invalid expression / Unexpected token","sql":"a ?& b"}
-{"dialect":"postgres","category":"parse: Invalid expression / Unexpected token","sql":"a ?| b"}
-{"dialect":"postgres","category":"parse: Invalid expression / Unexpected token","sql":"doc @? '$.a[*] ? (@ > 2)'"}
-{"dialect":"postgres","category":"parse: Invalid expression / Unexpected token","sql":"x !~ 'y'"}
-{"dialect":"postgres","category":"parse: Invalid expression / Unexpected token","sql":"x !~* 'y'"}
-{"dialect":"postgres","category":"parse: Invalid expression / Unexpected token","sql":"x ? 'x'"}
-{"dialect":"postgres","category":"parse: Invalid expression / Unexpected token","sql":"x @@ y"}
-{"dialect":"postgres","category":"parse: Invalid expression / Unexpected token","sql":"x ~ 'y'"}
-{"dialect":"postgres","category":"parse: Invalid expression / Unexpected token","sql":"x ~* 'y'"}
-{"dialect":"postgres","category":"parse: Invalid expression / Unexpected token","sql":"|/ x"}
-{"dialect":"postgres","category":"parse: Invalid expression / Unexpected token","sql":"||/ x"}
 {"dialect":"postgres","category":"parse: Required keyword","sql":"SELECT * FROM foo WHERE id = %(id_param)s"}
 {"dialect":"postgres","category":"parse: Required keyword","sql":"SELECT * FROM foo WHERE id = %s"}
+{"dialect":"postgres","category":"parse: Required keyword","sql":"SELECT MLEAST(VARIADIC ARRAY[]::numeric[])"}

@@ -152,10 +152,75 @@ var FunctionByName = map[string]func([]Expression) Expression{
 	"TIME_STR_TO_DATE": genericFunction(KindTimeStrToDate),
 	"TIME_STR_TO_TIME": genericFunction(KindTimeStrToTime),
 	"TIME_STR_TO_UNIX": genericFunction(KindTimeStrToUnix),
+	// dialect-funcs cluster singleton base entries (parity_gaps.txt gaps 114/160; verified
+	// against parser.py:121-129,394 - both are truly base-scope upstream, not per-dialect,
+	// unlike DATABASE()/SCHEMA() below which parsers/mysql.py:134-135 register mysql-only
+	// (see dialects/mysql.go's d.Functions map)).
+	"MOD": buildMod,
+	// Trunc._sql_names = ["TRUNC", "TRUNCATE"] (math.py:188-190); TRUNCATE(n, d) is
+	// disambiguated from the TRUNCATE TABLE statement in parser/stmt_comment_truncate.go's
+	// parseTruncateTable (ports _parse_truncate_table's "not to be confused with
+	// TRUNCATE(number, decimals)" L_PAREN retreat, parser.py:9469-9472) before ever reaching
+	// this map, so registering it here is safe.
+	"TRUNC":    genericFunction(KindTrunc),
+	"TRUNCATE": genericFunction(KindTrunc),
+	// Base-scope temporal/string spellings that upstream auto-registers in FUNCTION_BY_NAME
+	// via each class's _sql_names: DayOfMonth/DayOfWeek/DayOfYear/WeekOfYear each register BOTH
+	// the underscore and no-underscore forms (temporal.py:209-270), and LCASE/UCASE ->
+	// Lower/Upper (string.py:85-86,254-255). MySQL renders these with its own spelling
+	// overrides (generator/dialect_funcs.go, gated on g.dialect.Name=="mysql"); base/postgres
+	// keep the canonical DAY_OF_MONTH/.../LOWER/UPPER via functionFallbackSQL. (CURDATE/CURTIME/
+	// DATABASE/SCHEMA stay mysql-only in dialects/mysql.go - base does not register those,
+	// verified against the pinned oracle.)
+	"DAY_OF_MONTH": genericFunction(KindDayOfMonth),
+	"DAYOFMONTH":   genericFunction(KindDayOfMonth),
+	"DAY_OF_WEEK":  genericFunction(KindDayOfWeek),
+	"DAYOFWEEK":    genericFunction(KindDayOfWeek),
+	"DAY_OF_YEAR":  genericFunction(KindDayOfYear),
+	"DAYOFYEAR":    genericFunction(KindDayOfYear),
+	"WEEK_OF_YEAR": genericFunction(KindWeekOfYear),
+	"WEEKOFYEAR":   genericFunction(KindWeekOfYear),
+	"LCASE":        genericFunction(KindLower),
+	"UCASE":        genericFunction(KindUpper),
+	// CurrentDate is a base NO_PAREN_FUNCTIONS keyword (bare CURRENT_DATE, handled in the
+	// parser's noParenFunctions) but is ALSO a base FUNCTION_BY_NAME entry, so the
+	// parenthesized CURRENT_DATE() / CURRENT_DATE(<zone>) forms build a CurrentDate node too
+	// (currentdate_sql renders CURRENT_DATE without the empty parens an Anonymous call emits).
+	"CURRENT_DATE": genericFunction(KindCurrentDate),
+}
+
+// buildMod ports build_mod (parser.py:121-129): MOD(x, y) -> exp.Mod, parenthesizing either
+// operand if it is itself a Binary node (e.g. MOD(a + 1, 7) -> (a + 1) % 7) so the operator
+// precedence of the rendered `%` form round-trips correctly.
+func buildMod(args []Expression) Expression {
+	var this, expression Expression
+	if len(args) > 0 {
+		this = parenWrapBinary(args[0])
+	}
+	if len(args) > 1 {
+		expression = parenWrapBinary(args[1])
+	}
+	return newNode(KindMod, Args{"this": this, "expression": expression})
+}
+
+func parenWrapBinary(e Expression) Expression {
+	if e != nil && e.Is(TraitBinary) {
+		return Paren(Args{"this": e})
+	}
+	return e
 }
 
 func genericFunction(kind Kind) func([]Expression) Expression {
 	return func(args []Expression) Expression { return FromArgList(kind, args) }
+}
+
+// FromArgListFunc is the exported form of genericFunction, for building
+// dialects.Dialect.Functions overlay entries (per-dialect FUNCTIONS overrides, e.g.
+// mysql's CURDATE/DAY_OF_MONTH/LCASE/... cluster in dialects/mysql.go) from outside this
+// package: a plain positional this/expression/... mapping via FromArgList, same as every
+// exp.FunctionByName entry that has no custom builder.
+func FromArgListFunc(kind Kind) func([]Expression) Expression {
+	return genericFunction(kind)
 }
 
 func jsonExtractFunction(kind Kind) func([]Expression) Expression {
@@ -248,3 +313,7 @@ func Date(args Args) Expression           { return newNode(KindDate, args) }
 func AddMonths(args Args) Expression      { return newNode(KindAddMonths, args) }
 func DateAdd(args Args) Expression        { return newNode(KindDateAdd, args) }
 func DateDiff(args Args) Expression       { return newNode(KindDateDiff, args) }
+func Overlay(args Args) Expression        { return newNode(KindOverlay, args) }
+func Variadic(args Args) Expression       { return newNode(KindVariadic, args) }
+func CurrentDate(args Args) Expression    { return newNode(KindCurrentDate, args) }
+func CurrentTime(args Args) Expression    { return newNode(KindCurrentTime, args) }

@@ -1,6 +1,9 @@
 package dialects
 
-import "github.com/sjincho/sqlglot-go/tokens"
+import (
+	exp "github.com/sjincho/sqlglot-go/expressions"
+	"github.com/sjincho/sqlglot-go/tokens"
+)
 
 func Postgres() *Dialect {
 	d := Base()
@@ -14,6 +17,9 @@ func Postgres() *Dialect {
 	d.NullOrdering = "nulls_are_large"
 	d.SupportsLimitAll = true
 	d.TablesReferenceableAsColumns = true
+	// generator.py:466 SUPPORTS_SELECT_INTO is overridden True for postgres: `SELECT ... INTO x`
+	// stays inline instead of being rewritten to `CREATE TABLE x AS SELECT ...`.
+	d.SupportsSelectInto = true
 	// generators/postgres.py:234 RENAME_TABLE_WITH_DB = False.
 	d.RenameTableWithDB = false
 	// generators/postgres.py:233 SINGLE_STRING_INTERVAL = True.
@@ -36,6 +42,19 @@ func Postgres() *Dialect {
 	d.JSONTypeRequiredForExtraction = true
 	// TODO(slice 5b): DEFAULT_FUNCTIONS_COLUMN_NAMES (needs KindExplodingGenerateSeries + FUNCTIONS override).
 	// TODO(slice 5b): typing/{mysql,postgres}.py EXPRESSION_METADATA — feeds annotate_types only, off probe's path (ROADMAP 4c).
+
+	// CHAR_LENGTH/CHARACTER_LENGTH close parity_gaps.txt gaps 177-178. Length._sql_names =
+	// ["LENGTH", "LEN", "CHAR_LENGTH", "CHARACTER_LENGTH"] (string.py:69-71) is base-scope
+	// upstream, but functions.go:100-105 explicitly warns against unifying LENGTH globally
+	// (MySQL's LENGTH is byte-length, CHAR_LENGTH is char-length - a real semantic split,
+	// deferred to ROADMAP 5b), so only postgres (which has no such split: LENGTH,
+	// CHAR_LENGTH and CHARACTER_LENGTH all render identically as LENGTH(...), no generator
+	// override needed - see the default className fallback) gets these two spellings here.
+	// "LENGTH" itself is left unregistered: it already round-trips correctly as Anonymous.
+	d.Functions = map[string]func([]exp.Expression) exp.Expression{
+		"CHAR_LENGTH":      exp.FromArgListFunc(exp.KindLength),
+		"CHARACTER_LENGTH": exp.FromArgListFunc(exp.KindLength),
+	}
 
 	cfg := tokens.BaseConfig()
 	cfg.FormatStrings["b'"] = tokens.FormatString{End: "'", TokenType: tokens.BIT_STRING}

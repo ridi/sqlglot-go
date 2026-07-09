@@ -411,15 +411,18 @@ func (p *Parser) parseDcolon() exp.Expression {
 }
 
 // parseString ports _parse_string + STRING_PARSERS (parser.py:1122-1136, 8519-8523):
-// plain STRING -> Literal, and HEREDOC_STRING (postgres `$$...$$`) / RAW_STRING ->
-// RawString. NATIONAL_STRING/UNICODE_STRING are not modeled yet (their nodes aren't
-// ported), so those still fall through to parsePlaceholder.
+// plain STRING -> Literal, HEREDOC_STRING (postgres `$$...$$`) / RAW_STRING -> RawString,
+// and NATIONAL_STRING -> National. UNICODE_STRING is not modeled yet (its node isn't
+// ported), so it still falls through to parsePlaceholder.
 func (p *Parser) parseString() exp.Expression {
 	if p.match(tokens.STRING) {
 		return p.expression(exp.LiteralString(p.prev.Text), &p.prev, nil)
 	}
 	if p.match(tokens.HEREDOC_STRING) || p.match(tokens.RAW_STRING) {
 		return p.expression(exp.RawString(exp.Args{"this": p.prev.Text}), &p.prev, nil)
+	}
+	if p.match(tokens.NATIONAL_STRING) {
+		return p.expression(exp.National(exp.Args{"this": p.prev.Text}), &p.prev, nil)
 	}
 	return p.parsePlaceholder()
 }
@@ -449,7 +452,7 @@ func (p *Parser) parseBracket(this exp.Expression) exp.Expression {
 	if !p.match(tokens.L_BRACKET) {
 		return this
 	}
-	expressions := p.parseCsv(p.parseDisjunction)
+	expressions := p.parseCsv(p.parseBracketKeyValue)
 	if !p.match(tokens.R_BRACKET) {
 		p.raiseError("Expected ]")
 	}
@@ -460,4 +463,34 @@ func (p *Parser) parseBracket(this exp.Expression) exp.Expression {
 	}
 	p.addComments(this)
 	return p.parseBracket(this)
+}
+
+// parseBracketKeyValue ports _parse_bracket_key_value (parser.py:7655-7657). The is_map
+// parameter (used for MAP_KEYS_ARE_ARBITRARY_EXPRESSIONS dialects building key:value
+// props) is not modeled - no dialect in this port sets that flag, so it's inlined away.
+func (p *Parser) parseBracketKeyValue() exp.Expression {
+	return p.parseSlice(p.parseAlias(p.parseDisjunction(), true))
+}
+
+// parseSlice ports _parse_slice (parser.py:7745-7754): the `start:end:step` triple inside
+// a bracket subscript, e.g. x[1:2], x[:2], x[1:], x[:], x[-4:-1]. The DASH+COLON special
+// case handles a bare `-` end/step sentinel meaning -1 (e.g. duckdb `arr[:-:-1]` ->
+// `arr[:-1:-1]`, tests/dialects/test_duckdb.py:23).
+func (p *Parser) parseSlice(this exp.Expression) exp.Expression {
+	if !p.match(tokens.COLON) {
+		return this
+	}
+
+	var end exp.Expression
+	if p.matchPair(tokens.DASH, tokens.COLON, false) {
+		p.advance()
+		end = exp.Neg(exp.Args{"this": exp.LiteralNumber("1")})
+	} else {
+		end = p.parseAssignment()
+	}
+	var step exp.Expression
+	if p.match(tokens.COLON) {
+		step = p.parseUnary()
+	}
+	return p.expression(exp.Slice(exp.Args{"this": this, "expression": end, "step": step}), nil, nil)
 }

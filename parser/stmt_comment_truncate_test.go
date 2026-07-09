@@ -94,16 +94,23 @@ func TestParseCommentCommandDegrade(t *testing.T) {
 }
 
 // TestParseCommentNonPlainStringBodies covers COMMENT bodies that aren't plain STRING
-// literals. Base N'...' (NATIONAL_STRING) has no node in this port yet, so parseString
-// returns nil and parseComment degrades to a raw Command (an identity case that
-// round-trips byte-for-byte). Postgres $$...$$ (HEREDOC_STRING) now parses as a RawString
-// (parseString/STRING_PARSERS), so parseComment builds a structured Comment whose
-// generator normalizes the dollar-quote to a plain single-quoted string.
+// literals. Base N'...' (NATIONAL_STRING) now parses as National (parseString/
+// STRING_PARSERS, slice-strings cluster), so parseComment builds a structured Comment
+// that round-trips byte-for-byte (matches the pinned oracle: PYTHONPATH=.reference/
+// sqlglot-v30.12.0 python3 -c "import sqlglot; print(sqlglot.parse_one(\"COMMENT ON
+// TABLE my_schema.my_table IS N'National String'\").sql())"). Postgres $$...$$
+// (HEREDOC_STRING) parses as a RawString (parseString/STRING_PARSERS), so parseComment
+// builds a structured Comment whose generator normalizes the dollar-quote to a plain
+// single-quoted string.
 func TestParseCommentNonPlainStringBodies(t *testing.T) {
 	sql := "COMMENT ON TABLE my_schema.my_table IS N'National String'"
 	comment := parseOne(t, sql)
-	if comment.Kind() != exp.KindCommand {
-		t.Fatalf("%q: kind = %v, want Command:\n%s", sql, comment.Kind(), comment.ToS())
+	if comment.Kind() != exp.KindComment || comment.Arg("kind") != "TABLE" {
+		t.Fatalf("%q: kind mismatch:\n%s", sql, comment.ToS())
+	}
+	expression := exprArg(t, comment, "expression")
+	if expression.Kind() != exp.KindNational || expression.Text("this") != "National String" {
+		t.Fatalf("%q: expression mismatch:\n%s", sql, comment.ToS())
 	}
 	got, err := generateSQL(t, comment, "")
 	if err != nil {

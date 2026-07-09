@@ -357,6 +357,165 @@ const (
 	// KindCollateColumnConstraint), it has no Func/Condition mixin, so it gets no traitsOf
 	// row below.
 	KindPathColumnConstraint
+	// The affix/connector-operator cluster below closes the COLLATE / unary bitwise-not /
+	// PIPE_SLASH-CBRT / bitwise-shift / mysql XOR parity gaps, ported from _parse_term,
+	// UNARY_PARSERS, _parse_bitwise, and CONJUNCTION/DISJUNCTION (parser.py:908-913,
+	// 1113-1120, 6064-6117; parsers/mysql.py:72-81): exp.Collate (functions.py:171,
+	// `class Collate(Expression, Binary, Func): pass`), exp.BitwiseNot (core.py:2242,
+	// `class BitwiseNot(Unary): pass`), exp.Cbrt (math.py:130, `class Cbrt(Expression,
+	// Func): pass`), exp.BitwiseLeftShift/exp.BitwiseRightShift (core.py:2102-2112, both
+	// `class ...(Expression, Binary)` with an extra "requires_int128" arg unused by the
+	// base parser), and exp.Xor (core.py:2312, `class Xor(Expression, Connector, Func)`
+	// with an extra "round_input" arg, likewise unset by the base/mysql parser).
+	KindCollate
+	KindBitwiseNot
+	KindCbrt
+	KindBitwiseLeftShift
+	KindBitwiseRightShift
+	KindXor
+	// FROM-clause / DML tail cluster: exp.Directory (dml.py:187, Hive/Spark `INSERT
+	// OVERWRITE [LOCAL] DIRECTORY '...'`), exp.RowFormatDelimitedProperty/
+	// RowFormatSerdeProperty/SerdeProperties (properties.py:405,418,452, the Hive `ROW
+	// FORMAT ...` clause used by Directory), and exp.WithTableHint/IndexTableHint
+	// (query.py:923,927 - T-SQL `WITH (...)` / MySQL `USE|FORCE|IGNORE INDEX` table
+	// hints, parsed by _parse_table_hints and threaded through Table's existing "hints"
+	// arg). None of these have a Condition/Predicate/... mixin upstream, so none get a
+	// traitsOf row below.
+	KindDirectory
+	KindRowFormatDelimitedProperty
+	KindRowFormatSerdeProperty
+	KindSerdeProperties
+	KindWithTableHint
+	KindIndexTableHint
+
+	// ddl cluster: CREATE FUNCTION/PROCEDURE/INDEX/TRIGGER structured parsing, plus the
+	// small PROPERTY_PARSERS subset (parser.py:1227-1341) needed to close the DDL-tail
+	// parity gaps (RETURNS/LANGUAGE/SQL SECURITY/CALLED ON NULL INPUT/STRICT/IMMUTABLE-
+	// STABLE-DETERMINISTIC/SET .../CHARACTER SET/CHARSET/ROW_FORMAT). None of these carry a
+	// Condition/Func/... mixin upstream (all `class X(Expression)` or `class X(Property)`,
+	// and Property itself is a plain Expression subclass), so none get a traitsOf row below -
+	// mirroring the existing KindTableAlias/KindLambda pattern.
+	//
+	// KindProperties/KindUserDefinedFunction (ddl.py / properties.py): the generic property
+	// list container, and the UDF signature node (`name(args...)`).
+	KindProperties
+	KindUserDefinedFunction
+	// KindReturnsProperty/KindLanguageProperty/KindSqlSecurityProperty/
+	// KindCalledOnNullInputProperty/KindStrictProperty/KindStabilityProperty/
+	// KindSetConfigProperty/KindCharacterSetProperty/KindRowFormatProperty (properties.py:
+	// 74,222,393,397,401,456ish,464,480) - the small set of CREATE FUNCTION/TABLE tail
+	// properties this slice supports; the other ~90 PROPERTY_PARSERS entries are exotic
+	// dialect-specific storage/model properties out of scope (documented divergence,
+	// mirroring constraintParsers' analogous omission list in parser_constraints.go).
+	KindReturnsProperty
+	KindLanguageProperty
+	KindSqlSecurityProperty
+	KindCalledOnNullInputProperty
+	KindStrictProperty
+	KindStabilityProperty
+	KindSetConfigProperty
+	KindCharacterSetProperty
+	KindRowFormatProperty
+	// KindReturn ports exp.Return (query.py:882, `pass` - default {"this": True}): the
+	// `RETURN <expr>` wrapper _parse_create can apply to a UDF/procedure body
+	// (parser.py:2469-2470). Reachable only via the BEGIN/RETURN body path, which this port
+	// otherwise defers (no exp.Block/heredoc support) - kept for completeness/robustness
+	// rather than any target-gap SQL actually needing it.
+	KindReturn
+	// KindIndex/KindOpclass port exp.Index (query.py:558-566) and exp.Opclass (core.py:1817-
+	// 1818, `col opclass_name` inside an index column list, e.g. `USING gin(title
+	// public.gin_trgm_ops)`). KindIndexParameters (already ported) is Index's "params" arg.
+	KindIndex
+	KindOpclass
+	// KindTriggerProperties/KindTriggerExecute/KindTriggerEvent/KindTriggerReferencing port
+	// exp.TriggerProperties/TriggerExecute/TriggerEvent/TriggerReferencing (ddl.py:76-101):
+	// CREATE TRIGGER's structured body (timing/events/ON table/FROM/DEFERRABLE/REFERENCING/
+	// FOR EACH .../WHEN/EXECUTE FUNCTION|PROCEDURE).
+	KindTriggerProperties
+	KindTriggerExecute
+	KindTriggerEvent
+	KindTriggerReferencing
+
+	// dialect-funcs cluster: canonical Kinds closing the mysql CURTIME/CURDATE/
+	// DAY_OF_MONTH/DAY_OF_WEEK/DAY_OF_YEAR/WEEK_OF_YEAR/LCASE/UCASE/DATABASE/TRUNC
+	// spelling gaps and the postgres CHAR_LENGTH/CHARACTER_LENGTH/OVERLAY/VARIADIC gaps:
+	// exp.CurrentDate/CurrentTime (temporal.py:25,33), exp.DayOfMonth/DayOfWeek/DayOfYear/
+	// WeekOfYear (temporal.py:209,213,221,269), exp.CurrentSchema (functions.py:285),
+	// exp.Lower/Upper (string.py:85,254), exp.Length (string.py:69), exp.TimeStrToUnix
+	// (temporal.py:472), exp.Trunc (math.py:188), exp.Overlay (string.py:101), and
+	// exp.Variadic (query.py:2099 - a plain `pass` Expression, no Func/Condition mixin,
+	// so it gets no traitsOf row below, mirroring KindLambda/KindTableAlias).
+	KindCurrentDate
+	KindCurrentTime
+	KindCurrentSchema
+	KindDayOfMonth
+	KindDayOfWeek
+	KindDayOfYear
+	KindWeekOfYear
+	KindLower
+	KindUpper
+	KindLength
+	KindTrunc
+	KindOverlay
+	KindVariadic
+	// slice-strings cluster: KindSlice is exp.Slice (expressions/core.py:2017-2018, a plain
+	// Expression) - the `start:end:step` triple inside a bracket subscript, e.g. x[1:2].
+	// KindNational is exp.National (expressions/query.py:585-586, is_primitive=True) - a
+	// national-character string literal, e.g. N'abc'.
+	KindSlice
+	KindNational
+
+	// range-ops cluster: binary/range operators owned by parseRange/parseIs/
+	// columnOperators (parser.go). Mirrors core.py/array.py/json.py/string.py/query.py
+	// Binary subclasses used by RANGE_PARSERS + COLUMN_OPERATORS[PLACEHOLDER].
+	//
+	// KindGlob (core.py:2166, `class Glob(Expression, Binary, Predicate)`).
+	KindGlob
+	// KindOverlaps (core.py:2122, `class Overlaps(Expression, Binary)`).
+	KindOverlaps
+	// KindRegexpILike (string.py:448, `class RegexpILike(Expression, Binary, Func)`):
+	// the `~*` postgres operator / IRLIKE token. KindRegexpLike (RLIKE token / `~`)
+	// already exists above (function-registry cluster) and is reused as-is.
+	KindRegexpILike
+	// KindAdjacent (core.py:2234, `class Adjacent(Expression, Binary)`): postgres
+	// range `-|-` operator.
+	KindAdjacent
+	// KindArrayContainsAll/KindArrayContainedBy/KindArrayOverlaps (array.py:113,117,131,
+	// all `Expression, Binary, Func`): postgres `@>`/`<@`/`&&` array operators.
+	KindArrayContainsAll
+	KindArrayContainedBy
+	KindArrayOverlaps
+	// KindJSONBContains/KindJSONBContainsAllTopKeys/KindJSONBContainsAnyTopKeys/
+	// KindJSONBDeleteAtPath/KindJSONBPathExists (json.py:49,53,57,61,65, all
+	// `Expression, Binary, Func` except JSONBPathExists which also mixes in
+	// Predicate): postgres `?`/`?&`/`?|`/`#-`/`@?` jsonb operators.
+	KindJSONBContains
+	KindJSONBContainsAllTopKeys
+	KindJSONBContainsAnyTopKeys
+	KindJSONBDeleteAtPath
+	KindJSONBPathExists
+	// KindJSON (query.py:1965, `class JSON(Expression)`, no Condition/Func mixin):
+	// the `x IS JSON [VALUE|SCALAR|ARRAY|OBJECT] [WITH|WITHOUT] [UNIQUE KEYS]`
+	// predicate kind, built by parseIs and rendered by json_sql.
+	KindJSON
+	// KindOperator (core.py:2222, `class Operator(Expression, Binary)`): postgres
+	// `x OPERATOR(schema.op) y` explicit-operator syntax (_parse_operator).
+	KindOperator
+	// KindMatchAgainst (string.py:89, `class MatchAgainst(Expression, Func)`, no
+	// Binary mixin): mysql `MATCH(...) AGAINST(...)` full-text search, reused here
+	// as the target of postgres' `x @@ y` operator (parsers/postgres.py RANGE_PARSERS
+	// TokenType.DAT builds MatchAgainst(this=rhs, expressions=[lhs]), NOT a dedicated
+	// JSONB-path-match node - v30.12.0 has no exp.JSONBPathMatch).
+	KindMatchAgainst
+	// KindJSONArrayContains (json.py:38, `class JSONArrayContains(Expression, Binary,
+	// Predicate, Func)`): mysql `x MEMBER OF(y)`, built by parsers/mysql.py's
+	// RANGE_PARSERS[MEMBER_OF] (there is no dedicated exp.MemberOf class upstream).
+	KindJSONArrayContains
+	// KindSoundex (string.py:144, `class Soundex(Expression, Func)`): mysql
+	// `x SOUNDS LIKE y` desugars to EQ(Soundex(x), Soundex(y)) in
+	// parsers/mysql.py's RANGE_PARSERS[SOUNDS_LIKE] (there is no dedicated
+	// exp.SoundsLike class upstream).
+	KindSoundex
 )
 
 type Trait uint32
@@ -731,6 +890,83 @@ var argTypes = map[Kind][]argSpec{
 	KindXMLNamespace: defaultArgTypes,
 	// PathColumnConstraint (constraints.py:185): `pass` -> inherits {"this": True}.
 	KindPathColumnConstraint: defaultArgTypes,
+	// Affix/connector-operator cluster (see the Kind block comment above for exact
+	// upstream line numbers). Collate inherits Binary's {"this": True, "expression": True}
+	// (functions.py:171-172); BitwiseNot inherits Unary's default {"this": True}
+	// (core.py:2242-2243).
+	KindCollate:           {{"this", true}, {"expression", true}},
+	KindBitwiseNot:        defaultArgTypes,
+	KindCbrt:              defaultArgTypes,
+	KindBitwiseLeftShift:  {{"this", true}, {"expression", true}, {"requires_int128", false}},
+	KindBitwiseRightShift: {{"this", true}, {"expression", true}, {"requires_int128", false}},
+	KindXor:               {{"this", true}, {"expression", true}, {"round_input", false}},
+	// FROM-clause / DML tail cluster (dml.py:187/188, properties.py:405-419/452-453,
+	// query.py:923/924,927/928).
+	KindDirectory:                  {{"this", true}, {"local", false}, {"row_format", false}},
+	KindRowFormatDelimitedProperty: {{"fields", false}, {"escaped", false}, {"collection_items", false}, {"map_keys", false}, {"lines", false}, {"null", false}, {"serde", false}},
+	KindRowFormatSerdeProperty:     {{"this", true}, {"serde_properties", false}},
+	KindSerdeProperties:            {{"expressions", true}, {"with_", false}},
+	KindWithTableHint:              {{"expressions", true}},
+	KindIndexTableHint:             {{"this", true}, {"expressions", false}, {"target", false}},
+	// ddl cluster (see the Kind block comment above for the upstream class/line references).
+	KindProperties:                {{"expressions", true}},
+	KindUserDefinedFunction:       {{"this", true}, {"expressions", false}, {"wrapped", false}},
+	KindReturnsProperty:           {{"this", false}, {"is_table", false}, {"table", false}, {"null", false}},
+	KindLanguageProperty:          {{"this", true}},
+	KindSqlSecurityProperty:       {{"this", false}},
+	KindCalledOnNullInputProperty: {},
+	KindStrictProperty:            {},
+	KindStabilityProperty:         {{"this", true}},
+	KindSetConfigProperty:         {{"this", true}},
+	KindCharacterSetProperty:      {{"this", true}, {"default", false}},
+	KindRowFormatProperty:         {{"this", true}},
+	KindReturn:                    defaultArgTypes,
+	KindIndex:                     {{"this", false}, {"table", false}, {"unique", false}, {"primary", false}, {"amp", false}, {"params", false}},
+	KindOpclass:                   {{"this", true}, {"expression", true}},
+	KindTriggerProperties:         {{"table", true}, {"timing", true}, {"events", true}, {"execute", true}, {"constraint", false}, {"referenced_table", false}, {"deferrable", false}, {"initially", false}, {"referencing", false}, {"for_each", false}, {"when", false}},
+	KindTriggerExecute:            defaultArgTypes,
+	KindTriggerEvent:              {{"this", true}, {"columns", false}},
+	KindTriggerReferencing:        {{"old", false}, {"new", false}},
+	// dialect-funcs cluster (see the Kind block comment above for exact upstream lines).
+	KindCurrentDate:   {{"this", false}},
+	KindCurrentTime:   {{"this", false}},
+	KindCurrentSchema: {{"this", false}},
+	KindDayOfMonth:    defaultArgTypes,
+	KindDayOfWeek:     defaultArgTypes,
+	KindDayOfYear:     defaultArgTypes,
+	KindWeekOfYear:    defaultArgTypes,
+	KindLower:         defaultArgTypes,
+	KindUpper:         defaultArgTypes,
+	KindLength:        {{"this", true}, {"binary", false}, {"encoding", false}},
+	KindTrunc:         {{"this", true}, {"decimals", false}, {"fractions_supported", false}},
+	KindOverlay:       {{"this", true}, {"expression", true}, {"from_", true}, {"for_", false}},
+	KindVariadic:      defaultArgTypes,
+	// slice-strings cluster: Slice (core.py:2017-2018) - this/expression/step all optional.
+	// National (query.py:585-586) has no arg_types override, i.e. inherits the base
+	// Expression default (mirroring e.g. KindLogicalOr above).
+	KindSlice:    {{"this", false}, {"expression", false}, {"step", false}},
+	KindNational: defaultArgTypes,
+	// range-ops cluster (parser.go parseRange/parseIs/columnOperators). All the plain
+	// Binary subclasses below inherit Binary's {"this": True, "expression": True}
+	// verbatim (core.py:1623/1624); only ArrayOverlaps/JSON/Operator/MatchAgainst/
+	// JSONArrayContains override with extra fields.
+	KindGlob:                    {{"this", true}, {"expression", true}},
+	KindOverlaps:                {{"this", true}, {"expression", true}},
+	KindRegexpILike:             {{"this", true}, {"expression", true}, {"flag", false}},
+	KindAdjacent:                {{"this", true}, {"expression", true}},
+	KindArrayContainsAll:        {{"this", true}, {"expression", true}},
+	KindArrayContainedBy:        {{"this", true}, {"expression", true}},
+	KindArrayOverlaps:           {{"this", true}, {"expression", true}, {"null_safe", false}},
+	KindJSONBContains:           {{"this", true}, {"expression", true}},
+	KindJSONBContainsAllTopKeys: {{"this", true}, {"expression", true}},
+	KindJSONBContainsAnyTopKeys: {{"this", true}, {"expression", true}},
+	KindJSONBDeleteAtPath:       {{"this", true}, {"expression", true}},
+	KindJSONBPathExists:         {{"this", true}, {"expression", true}},
+	KindJSON:                    {{"this", false}, {"with_", false}, {"unique", false}},
+	KindOperator:                {{"this", true}, {"operator", true}, {"expression", true}},
+	KindMatchAgainst:            {{"this", true}, {"expressions", true}, {"modifier", false}},
+	KindJSONArrayContains:       {{"this", true}, {"expression", true}, {"json_type", false}},
+	KindSoundex:                 defaultArgTypes,
 }
 
 var traitsOf = map[Kind]Trait{
@@ -893,6 +1129,56 @@ var traitsOf = map[Kind]Trait{
 	// comment above).
 	KindXMLElement: TraitCondition | TraitFunc,
 	KindXMLTable:   TraitCondition | TraitFunc,
+	// Affix/connector-operator cluster (see the Kind block comment above). Collate mirrors
+	// DPipe's Binary+Func mixins; BitwiseNot mirrors Neg/Not's Unary mixin;
+	// BitwiseLeftShift/BitwiseRightShift mirror BitwiseAnd's plain Binary mixin (no Func);
+	// Xor mirrors And/Or's Connector+Func mixins exactly.
+	KindCollate:           TraitCondition | TraitBinary | TraitFunc,
+	KindBitwiseNot:        TraitCondition | TraitUnary,
+	KindCbrt:              TraitCondition | TraitFunc,
+	KindBitwiseLeftShift:  TraitCondition | TraitBinary,
+	KindBitwiseRightShift: TraitCondition | TraitBinary,
+	KindXor:               TraitCondition | TraitBinary | TraitConnector | TraitFunc,
+	// dialect-funcs cluster (see the Kind block comment above for exact upstream lines).
+	// KindVariadic is deliberately omitted: exp.Variadic is a plain `pass` Expression with
+	// no Func/Condition mixin upstream (query.py:2099), so it gets no trait bits, matching
+	// e.g. KindTableAlias/KindLambda above.
+	KindCurrentDate:   TraitCondition | TraitFunc,
+	KindCurrentTime:   TraitCondition | TraitFunc,
+	KindCurrentSchema: TraitCondition | TraitFunc,
+	KindDayOfMonth:    TraitCondition | TraitFunc,
+	KindDayOfWeek:     TraitCondition | TraitFunc,
+	KindDayOfYear:     TraitCondition | TraitFunc,
+	KindWeekOfYear:    TraitCondition | TraitFunc,
+	KindLower:         TraitCondition | TraitFunc,
+	KindUpper:         TraitCondition | TraitFunc,
+	KindLength:        TraitCondition | TraitFunc,
+	KindTrunc:         TraitCondition | TraitFunc,
+	KindOverlay:       TraitCondition | TraitFunc,
+	// slice-strings cluster: both KindSlice (`class Slice(Expression)`, core.py:2017) and
+	// KindNational (`class National(Expression)`, query.py:585) are plain Expression subclasses
+	// with no Condition mixin upstream, so neither gets a traitsOf row (matching e.g. KindLambda
+	// above). National is still a primitive value (primitive[KindNational]=true below), which is
+	// what its `N'...'` literal round-trip relies on - the Condition mixin is not.
+	// range-ops cluster: see the KindGlob..KindSoundex const-block comment above for
+	// the exact upstream class each mirrors. KindJSON (query.py:1965, plain
+	// Expression) gets no row, matching e.g. KindTableAlias.
+	KindGlob:                    TraitCondition | TraitBinary | TraitPredicate,
+	KindOverlaps:                TraitCondition | TraitBinary,
+	KindRegexpILike:             TraitCondition | TraitBinary | TraitFunc,
+	KindAdjacent:                TraitCondition | TraitBinary,
+	KindArrayContainsAll:        TraitCondition | TraitBinary | TraitFunc,
+	KindArrayContainedBy:        TraitCondition | TraitBinary | TraitFunc,
+	KindArrayOverlaps:           TraitCondition | TraitBinary | TraitFunc,
+	KindJSONBContains:           TraitCondition | TraitBinary | TraitFunc,
+	KindJSONBContainsAllTopKeys: TraitCondition | TraitBinary | TraitFunc,
+	KindJSONBContainsAnyTopKeys: TraitCondition | TraitBinary | TraitFunc,
+	KindJSONBDeleteAtPath:       TraitCondition | TraitBinary | TraitFunc,
+	KindJSONBPathExists:         TraitCondition | TraitBinary | TraitPredicate | TraitFunc,
+	KindOperator:                TraitCondition | TraitBinary,
+	KindMatchAgainst:            TraitCondition | TraitFunc,
+	KindJSONArrayContains:       TraitCondition | TraitBinary | TraitPredicate | TraitFunc,
+	KindSoundex:                 TraitCondition | TraitFunc,
 }
 
 var primitive = map[Kind]bool{
@@ -900,6 +1186,8 @@ var primitive = map[Kind]bool{
 	KindIdentifier: true,
 	KindVar:        true,
 	KindBoolean:    true,
+	// slice-strings cluster: National is_primitive=True (query.py:585-586).
+	KindNational: true,
 }
 
 var hashRaw = map[Kind]bool{
@@ -1179,6 +1467,68 @@ var className = map[Kind]string{
 	KindXMLTable:                            "XMLTable",
 	KindXMLNamespace:                        "XMLNamespace",
 	KindPathColumnConstraint:                "PathColumnConstraint",
+	KindCollate:                             "Collate",
+	KindBitwiseNot:                          "BitwiseNot",
+	KindCbrt:                                "Cbrt",
+	KindBitwiseLeftShift:                    "BitwiseLeftShift",
+	KindBitwiseRightShift:                   "BitwiseRightShift",
+	KindXor:                                 "Xor",
+	KindDirectory:                           "Directory",
+	KindRowFormatDelimitedProperty:          "RowFormatDelimitedProperty",
+	KindRowFormatSerdeProperty:              "RowFormatSerdeProperty",
+	KindSerdeProperties:                     "SerdeProperties",
+	KindWithTableHint:                       "WithTableHint",
+	KindIndexTableHint:                      "IndexTableHint",
+	KindProperties:                          "Properties",
+	KindUserDefinedFunction:                 "UserDefinedFunction",
+	KindReturnsProperty:                     "ReturnsProperty",
+	KindLanguageProperty:                    "LanguageProperty",
+	KindSqlSecurityProperty:                 "SqlSecurityProperty",
+	KindCalledOnNullInputProperty:           "CalledOnNullInputProperty",
+	KindStrictProperty:                      "StrictProperty",
+	KindStabilityProperty:                   "StabilityProperty",
+	KindSetConfigProperty:                   "SetConfigProperty",
+	KindCharacterSetProperty:                "CharacterSetProperty",
+	KindRowFormatProperty:                   "RowFormatProperty",
+	KindReturn:                              "Return",
+	KindIndex:                               "Index",
+	KindOpclass:                             "Opclass",
+	KindTriggerProperties:                   "TriggerProperties",
+	KindTriggerExecute:                      "TriggerExecute",
+	KindTriggerEvent:                        "TriggerEvent",
+	KindTriggerReferencing:                  "TriggerReferencing",
+	KindCurrentDate:                         "CurrentDate",
+	KindCurrentTime:                         "CurrentTime",
+	KindCurrentSchema:                       "CurrentSchema",
+	KindDayOfMonth:                          "DayOfMonth",
+	KindDayOfWeek:                           "DayOfWeek",
+	KindDayOfYear:                           "DayOfYear",
+	KindWeekOfYear:                          "WeekOfYear",
+	KindLower:                               "Lower",
+	KindUpper:                               "Upper",
+	KindLength:                              "Length",
+	KindTrunc:                               "Trunc",
+	KindOverlay:                             "Overlay",
+	KindVariadic:                            "Variadic",
+	KindSlice:                               "Slice",
+	KindNational:                            "National",
+	KindGlob:                                "Glob",
+	KindOverlaps:                            "Overlaps",
+	KindRegexpILike:                         "RegexpILike",
+	KindAdjacent:                            "Adjacent",
+	KindArrayContainsAll:                    "ArrayContainsAll",
+	KindArrayContainedBy:                    "ArrayContainedBy",
+	KindArrayOverlaps:                       "ArrayOverlaps",
+	KindJSONBContains:                       "JSONBContains",
+	KindJSONBContainsAllTopKeys:             "JSONBContainsAllTopKeys",
+	KindJSONBContainsAnyTopKeys:             "JSONBContainsAnyTopKeys",
+	KindJSONBDeleteAtPath:                   "JSONBDeleteAtPath",
+	KindJSONBPathExists:                     "JSONBPathExists",
+	KindJSON:                                "JSON",
+	KindOperator:                            "Operator",
+	KindMatchAgainst:                        "MatchAgainst",
+	KindJSONArrayContains:                   "JSONArrayContains",
+	KindSoundex:                             "Soundex",
 }
 
 // varLenArgs is the authoritative is_var_len_args=True set (mirroring the upstream Func

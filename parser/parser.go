@@ -307,6 +307,8 @@ func (p *Parser) ParseInto(rawTokens []tokens.Token, sql string, into exp.Kind) 
 		method = func() exp.Expression { return p.parseTableParts(false, false, false, false) }
 	case exp.KindIdentifier:
 		method = func() exp.Expression { return p.parseIdVar(true, nil) }
+	case exp.KindHint:
+		method = func() exp.Expression { return p.parseHintBody() }
 	default:
 		return nil, fmt.Errorf("no parser registered for kind %v", into)
 	}
@@ -531,6 +533,7 @@ func (p *Parser) parseSelect(opts ...bool) exp.Expression {
 	var this exp.Expression
 	if p.match(tokens.SELECT) {
 		comments := p.prevComments
+		hint := p.parseHint()
 		var all bool
 		matchedDistinct := false
 		if p.next.IsValid() && p.next.TokenType != tokens.DOT {
@@ -548,13 +551,25 @@ func (p *Parser) parseSelect(opts ...bool) exp.Expression {
 		if all && distinct != nil {
 			p.raiseError("Cannot specify both ALL and DISTINCT after SELECT")
 		}
+		// operationModifiers ports parser.py:3929-3931's `while self._curr and
+		// self._match_texts(self.OPERATION_MODIFIERS)` loop; see mysqlOperationModifiers
+		// (parser_hint.go) for why this is gated by dialect name rather than a shared set.
+		var operationModifiers []exp.Expression
+		if p.dialect.Name == "mysql" {
+			for p.curr.IsValid() && p.matchTexts(mysqlOperationModifiers) {
+				operationModifiers = append(operationModifiers, exp.Var(exp.Args{"this": stringsUpper(p.prev.Text)}))
+			}
+		}
 		// SELECT TOP is dead for M1 because TOP is not a base tokenizer keyword,
 		// but wire the parser shape to match upstream.
 		top := p.parseLimit(nil, true, false)
 		projections := p.parseExpressions()
-		selectArgs := exp.Args{"distinct": distinct, "expressions": projections}
+		selectArgs := exp.Args{"distinct": distinct, "expressions": projections, "hint": hint}
 		if top != nil {
 			selectArgs["limit"] = top
+		}
+		if len(operationModifiers) > 0 {
+			selectArgs["operation_modifiers"] = operationModifiers
 		}
 		this = p.expression(exp.Select(selectArgs), nil, nil)
 		if len(comments) > 0 {
@@ -695,11 +710,27 @@ func (p *Parser) parseTable(schema bool, joins bool, aliasTokens map[tokens.Toke
 			return subquery
 		}
 	}
+	// Postgres multi-function ROW FROM source (parser.py:4867-4874), e.g. `FROM ROWS FROM
+	// (FUNC1(col1), FUNC2(col2)) WITH ORDINALITY`: a Table whose "rows_from" arg holds the
+	// nested per-function tables (each with its own optional alias, parsed the same way any
+	// table-valued function's alias is). this is populated here so the ONLY/STAR/PARTITION/
+	// alias/hints/pivots/joins/ORDINALITY handling below applies uniformly.
+	var this exp.Expression
+	if p.matchTextSeq("ROWS", "FROM") {
+		rowsFromTables := p.parseWrappedCsv(func() exp.Expression {
+			return p.parseTable(false, false, nil, false, false, false, false)
+		})
+		if len(rowsFromTables) > 0 {
+			this = p.expression(exp.Table(exp.Args{"rows_from": rowsFromTables}), nil, nil)
+		}
+	}
 	// Postgres FROM ONLY <table> (parser.py:4876-4888): only relevant when the ONLY
 	// token isn't schema/db-reference position; excludes the table's descendant
 	// partitions from the scan. Set on the resulting Table below.
 	only := p.match(tokens.ONLY)
-	this := p.parseTableParts(schema, isDBReference, false, false)
+	if this == nil {
+		this = p.parseTableParts(schema, isDBReference, false, false)
+	}
 	if this == nil {
 		return nil
 	}
@@ -710,11 +741,41 @@ func (p *Parser) parseTable(schema bool, joins bool, aliasTokens map[tokens.Toke
 	// TRUNCATE / a FROM list - a no-op in this context, so consume and discard it
 	// (parser.py:4890-4891).
 	p.match(tokens.STAR)
+	// Hive/Spark PARTITION(...) table-partition selector (parser.py:4893-4895), e.g.
+	// `INSERT INTO a.b PARTITION(ds = '...') ...` / `INSERT OVERWRITE TABLE a.b
+	// PARTITION(ds) ...`. parseInsertTable passes parsePartition=true; mysql additionally
+	// enables it for every FROM source via SUPPORTS_PARTITION_SELECTION (parser.py:4893
+	// `parse_partition = parse_partition or self.SUPPORTS_PARTITION_SELECTION`), e.g.
+	// `SELECT * FROM t1 PARTITION(p0)`.
+	if (parsePartition || p.dialect.SupportsPartitionSelection) && p.match(tokens.PARTITION, false) {
+		this.Set("partition", p.parsePartition())
+	}
 	if schema {
 		return p.parseSchema(this)
 	}
-	if alias := p.parseTableAlias(aliasTokens); alias != nil {
-		this.Set("alias", alias)
+	// A join-starting keyword (CROSS/INNER/OUTER/STRAIGHT_JOIN/ASOF/NATURAL/POSITIONAL/...)
+	// must never be swallowed as a bare (non-AS) alias, e.g. `a STRAIGHT_JOIN b` or
+	// `a CROSS JOIN b`: upstream avoids this via _parse_table's fast path, whose
+	// TABLE_TERMINATORS check (parser.py:968-986, which spreads *JOIN_KINDS/METHODS/SIDES)
+	// short-circuits before alias parsing is ever attempted (parser.py:4824-4842). This
+	// port's parseTable intentionally skips that fast path (see the divergence note atop
+	// this function), so the equivalent protection is applied here instead: an explicit
+	// `AS` still parses normally (parseTableAlias's own any_token path already accepts
+	// these words as identifiers once AS is present, matching upstream).
+	//
+	// MySQL additionally removes TABLE_INDEX_HINT_TOKENS (FORCE/IGNORE/USE) from its
+	// TABLE_ALIAS_TOKENS (parsers/mysql.py:83-85), so e.g. `t1 USE INDEX (i1)` parses
+	// USE as the start of an index hint rather than t1's alias; base/Postgres keep them
+	// alias-eligible (matching upstream, where an unqualified `USE INDEX (...)` after a
+	// table is a MySQL-only construct).
+	mysqlIndexHint := p.dialect.Name == "mysql" && tableIndexHintTokens[p.curr.TokenType]
+	if p.curr.TokenType == tokens.ALIAS || (!mysqlIndexHint && !joinKinds[p.curr.TokenType] && !joinMethods[p.curr.TokenType] && !joinSides[p.curr.TokenType]) {
+		if alias := p.parseTableAlias(aliasTokens); alias != nil {
+			this.Set("alias", alias)
+		}
+	}
+	if hints := p.parseTableHints(); len(hints) > 0 {
+		this.Set("hints", hints)
 	}
 	if this.Arg("pivots") == nil {
 		if pivots := p.parsePivots(); pivots != nil {
@@ -897,10 +958,40 @@ func (p *Parser) parseJoin(skipJoinToken bool, parseBracket bool, aliasTokensArg
 	if kind != nil {
 		kwargs["kind"] = stringsUpper(kind.Text)
 	}
+	joinThis := asExpr(kwargs["this"])
 	if p.match(tokens.ON) {
 		kwargs["on"] = p.parseDisjunction()
 	} else if p.match(tokens.USING) {
 		kwargs["using"] = p.parseUsingIdentifiers()
+	} else if method == nil && !outerApply && !crossApply && (joinThis == nil || joinThis.Kind() != exp.KindUnnest) && !(kind != nil && kind.TokenType == tokens.CROSS) {
+		// Nested-join fallback (parser.py:4524-4541): a trailing ON/USING may belong to an
+		// outer join wrapping further joins nested on this join's `this`, e.g.
+		// `a JOIN b JOIN c USING (id) USING (id)` attaches the second USING to the `a JOIN b`
+		// join while `b JOIN c USING (id)` is stored as a nested join on `b`.
+		retreatIndex := p.index
+		var nested []exp.Expression
+		for {
+			join := p.parseJoin(false, false, aliasTokensArg)
+			if join == nil {
+				break
+			}
+			nested = append(nested, join)
+		}
+		if len(nested) > 0 && p.match(tokens.ON) {
+			kwargs["on"] = p.parseDisjunction()
+		} else if len(nested) > 0 && p.match(tokens.USING) {
+			kwargs["using"] = p.parseUsingIdentifiers()
+		} else {
+			nested = nil
+			p.retreat(retreatIndex)
+		}
+		if joinThis != nil {
+			if len(nested) > 0 {
+				joinThis.Set("joins", nested)
+			} else {
+				joinThis.Set("joins", nil)
+			}
+		}
 	}
 	comments := append([]string(nil), joinComments...)
 	for _, token := range []*tokens.Token{method, side, kind} {
@@ -985,22 +1076,39 @@ func (p *Parser) parseExpression() exp.Expression { return p.parseAlias(p.parseA
 
 func (p *Parser) parseAssignment() exp.Expression { return p.parseDisjunction() }
 
+// parseDisjunction ports _parse_disjunction (parser.py:5812-5822), matching the DISJUNCTION
+// token set. Upstream's DISJUNCTION is per-dialect: base has only OR (parser.py:885-887);
+// mysql additionally maps DPIPE -> exp.Or (parsers/mysql.py:78-80), since mysql's
+// DPIPE_IS_STRING_CONCAT=False frees `||` up to mean logical OR instead of concatenation.
 func (p *Parser) parseDisjunction() exp.Expression {
 	this := p.parseConjunction()
-	for p.match(tokens.OR) {
+	for p.match(tokens.OR) || (p.dialect.Name == "mysql" && p.match(tokens.DPIPE)) {
 		comments := p.prevComments
 		this = p.expression(exp.Or(exp.Args{"this": this, "expression": p.parseConjunction()}), nil, comments)
 	}
 	return this
 }
 
+// parseConjunction ports _parse_conjunction (parser.py:5824-5834), matching the CONJUNCTION
+// token set. Upstream's CONJUNCTION is per-dialect: base has only AND (parser.py:877-879);
+// mysql additionally maps DAMP (`&&`) -> exp.And and XOR -> exp.Xor (parsers/mysql.py:72-76).
 func (p *Parser) parseConjunction() exp.Expression {
 	this := p.parseEquality()
-	for p.match(tokens.AND) {
+	for {
+		var constructor func(exp.Args) exp.Expression
+		switch {
+		case p.match(tokens.AND):
+			constructor = exp.And
+		case p.dialect.Name == "mysql" && p.match(tokens.DAMP):
+			constructor = exp.And
+		case p.dialect.Name == "mysql" && p.match(tokens.XOR):
+			constructor = exp.Xor
+		default:
+			return this
+		}
 		comments := p.prevComments
-		this = p.expression(exp.And(exp.Args{"this": this, "expression": p.parseEquality()}), nil, comments)
+		this = p.expression(constructor(exp.Args{"this": this, "expression": p.parseEquality()}), nil, comments)
 	}
-	return this
 }
 
 var equalityTokens = map[tokens.TokenType]func(exp.Args) exp.Expression{
@@ -1056,7 +1164,7 @@ func (p *Parser) parseRange(this exp.Expression) exp.Expression {
 		if negate {
 			args["negate"] = true
 		}
-		this = p.expression(exp.Like(args), nil, nil)
+		this = p.parseEscape(p.expression(exp.Like(args), nil, nil))
 		negate = false
 	case tokens.ILIKE:
 		p.advance()
@@ -1064,7 +1172,7 @@ func (p *Parser) parseRange(this exp.Expression) exp.Expression {
 		if negate {
 			args["negate"] = true
 		}
-		this = p.expression(exp.ILike(args), nil, nil)
+		this = p.parseEscape(p.expression(exp.ILike(args), nil, nil))
 		negate = false
 	case tokens.SIMILAR_TO:
 		// binary_range_parser(exp.SimilarTo) (parser.py:62-71): unlike LIKE/ILIKE above,
@@ -1075,10 +1183,124 @@ func (p *Parser) parseRange(this exp.Expression) exp.Expression {
 	case tokens.ISNULL:
 		p.advance()
 		this = p.expression(exp.Is(exp.Args{"this": this, "expression": exp.Null()}), nil, nil)
+	case tokens.GLOB:
+		// binary_range_parser(exp.Glob) (parser.py:1188).
+		p.advance()
+		this = p.parseEscape(p.expression(exp.Glob(exp.Args{"this": this, "expression": p.parseBitwise()}), nil, nil))
+	case tokens.OVERLAPS:
+		// binary_range_parser(exp.Overlaps) (parser.py:1195).
+		p.advance()
+		this = p.parseEscape(p.expression(exp.Overlaps(exp.Args{"this": this, "expression": p.parseBitwise()}), nil, nil))
+	case tokens.RLIKE:
+		// binary_range_parser(exp.RegexpLike) (parser.py:1196). RLIKE is only ever
+		// tokenized by dialects that remap it (e.g. postgres' bare `~`), so this case is
+		// effectively dialect-gated at the tokenizer without needing a check here.
+		p.advance()
+		this = p.parseEscape(p.expression(exp.RegexpLike(exp.Args{"this": this, "expression": p.parseBitwise()}), nil, nil))
+	case tokens.IRLIKE:
+		// binary_range_parser(exp.RegexpILike) (parser.py:1191): base `~*` keyword.
+		p.advance()
+		this = p.parseEscape(p.expression(exp.RegexpILike(exp.Args{"this": this, "expression": p.parseBitwise()}), nil, nil))
+	case tokens.AT_GT:
+		// binary_range_parser(exp.ArrayContainsAll) (parser.py:1186): postgres `@>`.
+		p.advance()
+		this = p.parseEscape(p.expression(exp.ArrayContainsAll(exp.Args{"this": this, "expression": p.parseBitwise()}), nil, nil))
+	case tokens.LT_AT:
+		// binary_range_parser(exp.ArrayContainedBy) (parser.py:1194): postgres `<@`.
+		p.advance()
+		this = p.parseEscape(p.expression(exp.ArrayContainedBy(exp.Args{"this": this, "expression": p.parseBitwise()}), nil, nil))
+	case tokens.QMARK_AMP:
+		// binary_range_parser(exp.JSONBContainsAllTopKeys) (parser.py:1199): postgres `?&`.
+		p.advance()
+		this = p.parseEscape(p.expression(exp.JSONBContainsAllTopKeys(exp.Args{"this": this, "expression": p.parseBitwise()}), nil, nil))
+	case tokens.QMARK_PIPE:
+		// binary_range_parser(exp.JSONBContainsAnyTopKeys) (parser.py:1200): postgres `?|`.
+		p.advance()
+		this = p.parseEscape(p.expression(exp.JSONBContainsAnyTopKeys(exp.Args{"this": this, "expression": p.parseBitwise()}), nil, nil))
+	case tokens.HASH_DASH:
+		// binary_range_parser(exp.JSONBDeleteAtPath) (parser.py:1201): postgres `#-`.
+		p.advance()
+		this = p.parseEscape(p.expression(exp.JSONBDeleteAtPath(exp.Args{"this": this, "expression": p.parseBitwise()}), nil, nil))
+	case tokens.AT_QMARK:
+		// binary_range_parser(exp.JSONBPathExists) (parser.py:1202): postgres `@?`.
+		p.advance()
+		this = p.parseEscape(p.expression(exp.JSONBPathExists(exp.Args{"this": this, "expression": p.parseBitwise()}), nil, nil))
+	case tokens.ADJACENT:
+		// binary_range_parser(exp.Adjacent) (parser.py:1203): postgres range `-|-`.
+		p.advance()
+		this = p.parseEscape(p.expression(exp.Adjacent(exp.Args{"this": this, "expression": p.parseBitwise()}), nil, nil))
+	case tokens.DAMP:
+		// postgres-only: parsers/postgres.py RANGE_PARSERS adds
+		// TokenType.DAMP: binary_range_parser(exp.ArrayOverlaps) on top of the base
+		// Parser.RANGE_PARSERS. mysql's `&&` (TokenType.DAMP -> exp.And) is a
+		// CONJUNCTION-level entry instead, owned by parseConjunction; base has no `&&`
+		// support upstream either, so this case does nothing (leaves DAMP unconsumed)
+		// for every other dialect.
+		if p.dialect.Name == "postgres" {
+			p.advance()
+			this = p.parseEscape(p.expression(exp.ArrayOverlaps(exp.Args{"this": this, "expression": p.parseBitwise()}), nil, nil))
+		}
+	case tokens.DAT:
+		// parsers/postgres.py RANGE_PARSERS[TokenType.DAT]: postgres `x @@ y` full-text
+		// match, built as exp.MatchAgainst(this=<rhs>, expressions=[<lhs>]) - not a
+		// dedicated JSONB-path-match node (v30.12.0 has no exp.JSONBPathMatch). DAT is
+		// only ever tokenized by postgres' `"@@": DAT` keyword remap, so (like DAMP's
+		// non-postgres branches) this case is unreachable for other dialects.
+		p.advance()
+		this = p.expression(exp.MatchAgainst(exp.Args{"this": p.parseBitwise(), "expressions": []exp.Expression{this}}), nil, nil)
+	case tokens.OPERATOR:
+		// _parse_operator (parser.py:10122-10139): postgres `x OPERATOR(schema.op) y`,
+		// chainable (`x OPERATOR(op1) y OPERATOR(op2) z`).
+		p.advance()
+		for {
+			if !p.match(tokens.L_PAREN) {
+				break
+			}
+			op := ""
+			for p.curr.IsValid() && !p.match(tokens.R_PAREN) {
+				op += p.curr.Text
+				p.advance()
+			}
+			comments := p.prevComments
+			this = p.expression(exp.Operator(exp.Args{"this": this, "operator": op, "expression": p.parseBitwise()}), nil, comments)
+			if !p.match(tokens.OPERATOR) {
+				break
+			}
+		}
+	case tokens.MEMBER_OF:
+		// mysql RANGE_PARSERS[TokenType.MEMBER_OF] (parsers/mysql.py:97-99): `x MEMBER
+		// OF(y)` -> exp.JSONArrayContains(this=x, expression=y) (no dedicated exp.MemberOf
+		// class upstream). MEMBER_OF is mysql-only tokenized, so this case is unreachable
+		// elsewhere.
+		p.advance()
+		this = p.expression(exp.JSONArrayContains(exp.Args{"this": this, "expression": p.parseWrapped(p.parseExpression, false)}), nil, nil)
+	case tokens.SOUNDS_LIKE:
+		// mysql RANGE_PARSERS[TokenType.SOUNDS_LIKE] (parsers/mysql.py:91-96): `x SOUNDS
+		// LIKE y` desugars to EQ(Soundex(x), Soundex(y)) (no dedicated exp.SoundsLike
+		// class upstream). SOUNDS_LIKE is mysql-only tokenized.
+		p.advance()
+		this = p.expression(exp.EQ(exp.Args{
+			"this":       p.expression(exp.Soundex(exp.Args{"this": this}), nil, nil),
+			"expression": p.expression(exp.Soundex(exp.Args{"this": p.parseTerm()}), nil, nil),
+		}), nil, nil)
+	case tokens.IS:
+		// RANGE_PARSERS[TokenType.IS] = lambda self, this: self._parse_is(this)
+		// (parser.py:1192): matched here in addition to the unconditional `if
+		// self._match(TokenType.IS)` check below (parser.py:5880-5881) so a chained
+		// `x IS TRUE IS TRUE` gets two chances to consume an IS - parseIs's own trailing
+		// parseColumnOps call doesn't re-enter IS itself.
+		p.advance()
+		this = p.parseIs(this)
 	}
 	if negate && p.match(tokens.NULL) {
 		this = p.expression(exp.Is(exp.Args{"this": this, "expression": exp.Null()}), nil, nil)
 		negate = false
+	}
+	// Postgres ISNULL/NOTNULL postfix predicates ("Postgres supports ISNULL and NOTNULL
+	// for conditions", parser.py comment above _parse_range's NOTNULL check).
+	if p.match(tokens.NOTNULL) {
+		this = p.expression(exp.Is(exp.Args{"this": this, "expression": exp.Null()}), nil, nil)
+		this = p.expression(exp.Not(exp.Args{"this": this}), nil, nil)
 	}
 	if p.match(tokens.IS) {
 		this = p.parseIs(this)
@@ -1101,6 +1323,10 @@ func (p *Parser) parseEscape(this exp.Expression) exp.Expression {
 	return p.expression(exp.Escape(exp.Args{"this": this, "expression": expression}), nil, nil)
 }
 
+// isJSONPredicateKind is IS_JSON_PREDICATE_KIND (parser.py:1707): the optional kind word
+// following `IS JSON` - `x IS JSON [VALUE|SCALAR|ARRAY|OBJECT] ...`.
+var isJSONPredicateKind = map[string]bool{"VALUE": true, "SCALAR": true, "ARRAY": true, "OBJECT": true}
+
 func (p *Parser) parseIs(this exp.Expression) exp.Expression {
 	index := p.index - 1
 	negate := p.match(tokens.NOT)
@@ -1111,16 +1337,35 @@ func (p *Parser) parseIs(this exp.Expression) exp.Expression {
 		}
 		return p.expression(constructor(exp.Args{"this": this, "expression": p.parseBitwise()}), nil, nil)
 	}
-	expression := p.parseNull()
-	if expression == nil {
-		expression = p.parseBoolean()
-	}
-	if expression == nil {
-		expression = p.parseBitwise()
-	}
-	if expression == nil {
-		p.retreat(index)
-		return nil
+	var expression exp.Expression
+	if p.match(tokens.JSON) {
+		// `x IS JSON [VALUE|SCALAR|ARRAY|OBJECT] [WITH|WITHOUT] [UNIQUE [KEYS]]`
+		// (parser.py:5904-5916).
+		var kind any
+		if p.matchTexts(isJSONPredicateKind) {
+			kind = stringsUpper(p.prev.Text)
+		}
+		var with_ any
+		if p.matchTextSeq("WITH") {
+			with_ = true
+		} else if p.matchTextSeq("WITHOUT") {
+			with_ = false
+		}
+		unique := p.match(tokens.UNIQUE)
+		p.matchTextSeq("KEYS")
+		expression = p.expression(exp.JSON(exp.Args{"this": kind, "with_": with_, "unique": unique}), nil, nil)
+	} else {
+		expression = p.parseNull()
+		if expression == nil {
+			expression = p.parseBoolean()
+		}
+		if expression == nil {
+			expression = p.parseBitwise()
+		}
+		if expression == nil {
+			p.retreat(index)
+			return nil
+		}
 	}
 	this = p.expression(exp.Is(exp.Args{"this": this, "expression": expression}), nil, nil)
 	if negate {
@@ -1167,6 +1412,9 @@ var bitwiseTokens = map[tokens.TokenType]func(exp.Args) exp.Expression{
 	tokens.CARET: exp.BitwiseXor,
 }
 
+// parseBitwise ports _parse_bitwise (parser.py:6064-6095): AMP/PIPE/CARET plus, when
+// dialect-enabled, DPIPE-as-concat, DQMARK-as-Coalesce, and the two-token `<<`/`>>` shift
+// operators (matchPair, since LT LT / GT GT are two adjacent single-char tokens, not one).
 func (p *Parser) parseBitwise() exp.Expression {
 	this := p.parseTerm()
 	for {
@@ -1175,6 +1423,12 @@ func (p *Parser) parseBitwise() exp.Expression {
 			this = p.expression(constructor(exp.Args{"this": this, "expression": p.parseTerm()}), nil, nil)
 		} else if p.dialect.DPipeIsStringConcat && p.match(tokens.DPIPE) {
 			this = p.expression(exp.DPipe(exp.Args{"this": this, "expression": p.parseTerm(), "safe": !p.dialect.StrictStringConcat}), nil, nil)
+		} else if p.match(tokens.DQMARK) {
+			this = p.expression(exp.Coalesce(exp.Args{"this": this, "expressions": []exp.Expression{p.parseTerm()}}), nil, nil)
+		} else if p.matchPair(tokens.LT, tokens.LT, true) {
+			this = p.expression(exp.BitwiseLeftShift(exp.Args{"this": this, "expression": p.parseTerm()}), nil, nil)
+		} else if p.matchPair(tokens.GT, tokens.GT, true) {
+			this = p.expression(exp.BitwiseRightShift(exp.Args{"this": this, "expression": p.parseTerm()}), nil, nil)
 		} else {
 			break
 		}
@@ -1183,17 +1437,35 @@ func (p *Parser) parseBitwise() exp.Expression {
 }
 
 var termTokens = map[tokens.TokenType]func(exp.Args) exp.Expression{
-	tokens.DASH: exp.Sub,
-	tokens.PLUS: exp.Add,
-	tokens.MOD:  exp.Mod,
+	tokens.DASH:    exp.Sub,
+	tokens.PLUS:    exp.Add,
+	tokens.MOD:     exp.Mod,
+	tokens.COLLATE: exp.Collate,
 }
 
+// parseTerm ports _parse_term (parser.py:6097-6117). The COLLATE post-build step mirrors
+// upstream's normalization (parser.py:6107-6115): a single-part column collation operand
+// (e.g. `x COLLATE utf8_bin`) becomes a bare Var (or the Identifier itself, if quoted) instead
+// of staying a Column, while a qualified one (e.g. `x COLLATE pg_catalog."default"`) is left
+// as-is so it still round-trips.
 func (p *Parser) parseTerm() exp.Expression {
 	this := p.parseFactor()
 	for constructor, ok := termTokens[p.curr.TokenType]; ok; constructor, ok = termTokens[p.curr.TokenType] {
 		p.advance()
 		comments := p.prevComments
 		this = p.expression(constructor(exp.Args{"this": this, "expression": p.parseFactor()}), nil, comments)
+
+		if this != nil && this.Kind() == exp.KindCollate {
+			if expr := this.Expr(); expr != nil && expr.Kind() == exp.KindColumn && len(expr.Parts()) == 1 {
+				if ident := expr.This(); ident != nil && ident.Kind() == exp.KindIdentifier {
+					if quoted, _ := ident.Arg("quoted").(bool); quoted {
+						this.Set("expression", ident)
+					} else {
+						this.Set("expression", exp.Var(exp.Args{"this": ident.Name()}))
+					}
+				}
+			}
+		}
 	}
 	return this
 }
@@ -1235,6 +1507,21 @@ func (p *Parser) parseUnary() exp.Expression {
 		// (parser.py:1115), so NOT is lower-precedence than comparison/range ops:
 		// `NOT a = b` -> Not(EQ(a, b)), `NOT a IN (..)` -> Not(In(a, ..)).
 		return p.expression(exp.Not(exp.Args{"this": p.parseEquality()}), nil, p.prevComments)
+	}
+	if p.match(tokens.TILDE) {
+		return p.expression(exp.BitwiseNot(exp.Args{"this": p.parseUnary()}), nil, p.prevComments)
+	}
+	if p.dialect.Name == "postgres" && p.match(tokens.RLIKE) {
+		// Postgres remaps the single-char `~` lexeme from TILDE to RLIKE, since `~` also
+		// doubles as the binary REGEXP-LIKE operator there (parsers/postgres.py:185-188);
+		// UNARY_PARSERS still builds BitwiseNot when RLIKE appears in prefix position.
+		return p.expression(exp.BitwiseNot(exp.Args{"this": p.parseUnary()}), nil, p.prevComments)
+	}
+	if p.match(tokens.PIPE_SLASH) {
+		return p.expression(exp.Sqrt(exp.Args{"this": p.parseUnary()}), nil, p.prevComments)
+	}
+	if p.match(tokens.DPIPE_SLASH) {
+		return p.expression(exp.Cbrt(exp.Args{"this": p.parseUnary()}), nil, p.prevComments)
 	}
 	return p.parseType(true, false)
 }
@@ -1299,9 +1586,9 @@ func (p *Parser) parseType(parseInterval, fallbackToIdentifier bool) exp.Express
 }
 
 // primaryParsers ports the base PRIMARY_PARSERS (parser.py:1122-1173: STRING_PARSERS +
-// NUMERIC_PARSERS + NULL/TRUE/FALSE/STAR). NATIONAL_STRING/UNICODE_STRING/BIT_STRING/
-// BYTE_STRING/HEX_STRING/INTRODUCER/SESSION_PARAMETER entries are omitted: those node kinds
-// aren't modeled by this port yet.
+// NUMERIC_PARSERS + NULL/TRUE/FALSE/STAR). UNICODE_STRING/BIT_STRING/BYTE_STRING/HEX_STRING/
+// INTRODUCER/SESSION_PARAMETER entries are omitted: those node kinds aren't modeled by this
+// port yet. NATIONAL_STRING (-> National, slice-strings cluster) is included below.
 //
 // Declared as an empty map + func init() assignment (rather than a map literal) because a
 // literal here would create a Go initialization-cycle: primaryParsers' STAR entry calls
@@ -1319,6 +1606,9 @@ func init() {
 	}
 	primaryParsers[tokens.RAW_STRING] = func(p *Parser, token tokens.Token) exp.Expression {
 		return p.expression(exp.RawString(exp.Args{"this": token.Text}), &token, nil)
+	}
+	primaryParsers[tokens.NATIONAL_STRING] = func(p *Parser, token tokens.Token) exp.Expression {
+		return p.expression(exp.National(exp.Args{"this": token.Text}), &token, nil)
 	}
 	primaryParsers[tokens.NUMBER] = func(p *Parser, token tokens.Token) exp.Expression {
 		return p.expression(exp.LiteralNumber(token.Text), &token, nil)
@@ -1384,7 +1674,17 @@ func (p *Parser) parseAtTimeZone(this exp.Expression) exp.Expression {
 func (p *Parser) parseColumn() exp.Expression {
 	column := p.parseColumnPartsFast()
 	if column == nil {
-		column = p.parseColumnOps(p.parseColumnReference())
+		// Mirror _parse_column (parser.py:6591): `_parse_column_ops(this) if this else this`.
+		// When parseColumnReference returns nil (e.g. while a NO_PAREN_FUNCTION speculative
+		// parse like IF backs out), a column operator such as DOT would build a Dot with a
+		// nil `this` and fail required-arg validation instead of cleanly declining. Skip
+		// parseColumnOps in that case - except for a leading bracket, which this port routes
+		// through parseColumnOps to build a bare array literal (`[1, 2]`) with a nil `this`.
+		this := p.parseColumnReference()
+		if this == nil && !bracketsTokens[p.curr.TokenType] {
+			return nil
+		}
+		column = p.parseColumnOps(this)
 	}
 	return column
 }
@@ -1443,8 +1743,15 @@ func (p *Parser) parseColumnPartsFast() exp.Expression {
 	return column
 }
 
+// parseColumnReference ports _parse_column_reference (parser.py:6674-6688). A bare VALUES
+// not immediately followed by "(" is reparsed as a plain identifier (e.g. `SELECT values`,
+// `values.c`) when the dialect allows it (see Dialect.ValuesFollowedByParen).
 func (p *Parser) parseColumnReference() exp.Expression {
 	this := p.parseField(false, nil, false)
+	if this == nil && p.match(tokens.VALUES, false) && p.dialect.ValuesFollowedByParen &&
+		(!p.next.IsValid() || p.next.TokenType != tokens.L_PAREN) {
+		this = p.parseIdVar(true, nil)
+	}
 	if this != nil && this.Kind() == exp.KindIdentifier {
 		this = p.expression(exp.Column(exp.Args{"this": this}), nil, this.PopComments())
 	}
@@ -1490,6 +1797,12 @@ var columnOperators = map[tokens.TokenType]columnOpFunc{
 	},
 	tokens.DHASH_ARROW: func(p *Parser, this, path exp.Expression) exp.Expression {
 		return p.expression(exp.JSONBExtractScalar(exp.Args{"this": this, "expression": path}), nil, nil)
+	},
+	// COLUMN_OPERATORS[TokenType.PLACEHOLDER] (parser.py:1033-1035): postgres `x ? key`
+	// jsonb-contains-key operator, reusing the base "?" -> PLACEHOLDER SINGLE_TOKENS
+	// mapping (tokens.py:161) rather than a dedicated keyword.
+	tokens.PLACEHOLDER: func(p *Parser, this, key exp.Expression) exp.Expression {
+		return p.expression(exp.JSONBContains(exp.Args{"this": this, "expression": key}), nil, nil)
 	},
 }
 
@@ -1781,14 +2094,22 @@ func (p *Parser) parseStarOp(keywords ...string) []exp.Expression {
 }
 
 // parsePlaceholder ports PLACEHOLDER_PARSERS (parser.py:1175-1183) + _parse_placeholder
-// (parser.py:8590-8597). The COLON (`:name`) entry is not ported yet; PARAMETER (`@var`)
-// routes to parseParameter.
+// (parser.py:8590-8597). PARAMETER (`@var`) routes to parseParameter; COLON (`:name`)
+// builds a named Placeholder from the following ID_VAR_TOKENS token (e.g. `:hello`),
+// retreating past the COLON if no such token follows (mirrors the generic
+// _parse_placeholder's `self._advance(-1)` on a falsy PLACEHOLDER_PARSERS result).
 func (p *Parser) parsePlaceholder() exp.Expression {
 	if p.match(tokens.PLACEHOLDER) {
 		return p.expression(exp.Placeholder(nil), &p.prev, nil)
 	}
 	if p.match(tokens.PARAMETER) {
 		return p.parseParameter()
+	}
+	if p.match(tokens.COLON) {
+		if p.matchSet(idVarTokens) {
+			return p.expression(exp.Placeholder(exp.Args{"this": p.prev.Text}), &p.prev, nil)
+		}
+		p.retreat(p.index - 1)
 	}
 	return nil
 }
@@ -2005,7 +2326,18 @@ func (p *Parser) parseFunctionCall(functions map[string]func([]exp.Expression) e
 		return p.parseWindow(parser(p), false)
 	}
 	if p.next.TokenType != tokens.L_PAREN {
-		// TODO(1d): NO_PAREN_FUNCTIONS CURRENT_*.
+		// NO_PAREN_FUNCTIONS (parser.py:6973-6975): a bare CURRENT_DATE/CURRENT_TIME keyword
+		// (no trailing "(", not after a DOT) builds the corresponding zero-arg node, e.g.
+		// postgres `date_add(current_date, ...)` -> CurrentDate rendering CURRENT_DATE. Only
+		// the tokens whose Kinds this port models are wired here (see noParenFunctions);
+		// CURRENT_TIMESTAMP/USER/ROLE keep falling through to a bare column, which already
+		// round-trips for base/mysql/postgres.
+		if optionalParens && !afterDot {
+			if build := noParenFunctions[tokenType]; build != nil {
+				p.advance()
+				return p.expression(build(exp.Args{}), &token, comments)
+			}
+		}
 		return nil
 	}
 	if anyToken {
@@ -2013,18 +2345,32 @@ func (p *Parser) parseFunctionCall(functions map[string]func([]exp.Expression) e
 			return nil
 		}
 		// MySQL FUNC_TOKENS += TokenType.VALUES (parsers/mysql.py:63-70): see
-		// dialects.Dialect.ValuesIsFunction.
-	} else if !funcTokens[tokenType] && !(tokenType == tokens.VALUES && p.dialect.ValuesIsFunction) {
+		// dialects.Dialect.ValuesIsFunction. MySQL FUNC_TOKENS also += DATABASE/MOD/SCHEMA
+		// (parsers/mysql.py:63-70): rather than a real per-dialect FUNC_TOKENS table (deferred
+		// to slice 5b, see dialects.Dialect.ValuesIsFunction's doc), a name registered in
+		// exp.FunctionByName or the dialect's own Functions overlay is itself sufficient
+		// evidence that this token should be treated as a function-call start, so it's checked
+		// here directly instead of adding three more single-purpose bool flags. This only ever
+		// affects tokens whose text is ALSO a keyword in this dialect's tokenizer (e.g. mysql's
+		// MOD/DATABASE/SCHEMA) - everywhere else the token is already tokens.VAR and funcTokens
+		// (which includes VAR) already covers it, so this is a no-op for the vast majority of
+		// FunctionByName/Functions entries.
+	} else if !funcTokens[tokenType] && !(tokenType == tokens.VALUES && p.dialect.ValuesIsFunction) &&
+		p.dialect.Functions[upper] == nil && exp.FunctionByName[upper] == nil {
 		return nil
 	}
 	p.advance(2)
 	var result exp.Expression
 	parser := functionParsers[upper]
-	// Upstream FUNCTION_PARSERS is per-dialect and "VALUES" lives only in MySQL's map
-	// (parsers/mysql.py:158-160). This port keeps one shared map, so gate the VALUES entry
-	// by the dialect flag: otherwise a quoted identifier like `"VALUES"(a)` in base/Postgres
-	// would wrongly parse as the MySQL VALUES function instead of an Anonymous call.
-	if upper == "VALUES" && !p.dialect.ValuesIsFunction {
+	// Upstream FUNCTION_PARSERS is per-dialect: "VALUES" lives only in MySQL's map
+	// (parsers/mysql.py:158-160) and "SUBSTR" is a MySQL-only alias of _parse_substring
+	// (parsers/mysql.py:162; base/Postgres only register "SUBSTRING", parser.py:1515, so
+	// `SUBSTR(1 FROM 2 FOR 3)` fails to parse there - parity_gaps.txt gap 127 is mysql-only).
+	// This port keeps one shared map, so gate both entries by the dialect: otherwise a quoted
+	// identifier like `"VALUES"(a)` in base/Postgres would wrongly parse as the MySQL VALUES
+	// function instead of an Anonymous call, and base/Postgres SUBSTR(...) would wrongly gain
+	// MySQL's FROM/FOR grammar instead of following the plain comma-arg FunctionByName path.
+	if (upper == "VALUES" && !p.dialect.ValuesIsFunction) || (upper == "SUBSTR" && p.dialect.Name != "mysql") {
 		parser = nil
 	}
 	// JSON_VALUE's FUNCTION_PARSERS entry is only registered by MySQL (parsers/mysql.py:161)
@@ -2050,7 +2396,7 @@ func (p *Parser) parseFunctionCall(functions map[string]func([]exp.Expression) e
 			}
 		}
 		if functions == nil {
-			functions = exp.FunctionByName
+			functions = mergedDialectFunctions(p.dialect)
 		}
 		function := functions[upper]
 		knownFunction := function != nil && !anonymous
@@ -2172,7 +2518,23 @@ func (p *Parser) parseCase() exp.Expression {
 		defaultExpr = p.parseDisjunction()
 	}
 	if !p.match(tokens.END) {
-		p.raiseError("Expected END after CASE", p.prev)
+		// Reference repair (parser.py:7763-7770): `ELSE interval END` misparses as an
+		// exp.Interval whose "this" swallowed the closing END as a bare-identifier unit
+		// (e.g. "CASE WHEN TRUE THEN 1 ELSE interval END" has no token left for the real
+		// END to match against). If that's what happened, unwind it back into the column
+		// reference `interval` instead of raising.
+		fixed := false
+		if defaultExpr != nil && defaultExpr.Kind() == exp.KindInterval {
+			if inner, _ := defaultExpr.Arg("this").(exp.Expression); inner != nil {
+				if sql, err := inner.SQL(exp.GenerateOptions{}); err == nil && stringsUpper(sql) == "END" {
+					defaultExpr = exp.Column(exp.Args{"this": exp.ToIdentifier("interval")})
+					fixed = true
+				}
+			}
+		}
+		if !fixed {
+			p.raiseError("Expected END after CASE", p.prev)
+		}
 	}
 	return p.expression(exp.Case(exp.Args{"this": expression, "ifs": ifs, "default": defaultExpr}), nil, comments)
 }
@@ -2559,6 +2921,20 @@ func (p *Parser) parseWindowSpec() map[string]any {
 }
 
 var noParenFunctionParsers map[string]func(*Parser) exp.Expression
+
+// noParenFunctions ports NO_PAREN_FUNCTIONS (parser.py:431-439): keyword tokens that, when
+// not followed by "(", build a zero-arg function node. Only the subset whose Kinds this port
+// models is included - CurrentDate (CURRENT_DATE/CURRENT_DATETIME) and CurrentTime
+// (CURRENT_TIME); CURRENT_TIMESTAMP/CURRENT_USER/CURRENT_ROLE are omitted (no
+// CurrentTimestamp/CurrentUser/CurrentRole Kind yet), still parsing as bare columns which
+// round-trip unchanged for base/mysql/postgres. currentDateSQL renders CurrentDate without the
+// empty parens the generic fallback would emit; CurrentTime keeps the parenthesized fallback,
+// matching upstream (currentdate_sql exists, currenttime_sql does not).
+var noParenFunctions = map[tokens.TokenType]func(exp.Args) exp.Expression{
+	tokens.CURRENT_DATE:     exp.CurrentDate,
+	tokens.CURRENT_DATETIME: exp.CurrentDate,
+	tokens.CURRENT_TIME:     exp.CurrentTime,
+}
 
 var subqueryPredicates = map[tokens.TokenType]func(exp.Args) exp.Expression{
 	tokens.ANY:    exp.Any,
