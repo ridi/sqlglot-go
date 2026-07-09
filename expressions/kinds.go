@@ -276,6 +276,23 @@ const (
 	// BOOLOR_AGG all parse to it; postgres/mysql rename it on generation (see
 	// generator/aggregate.go logicalOrSQL).
 	KindLogicalOr
+	// KindAtTimeZone/KindPseudoType/KindObjectIdentifier close the TYPE/CAST/`::`/
+	// AT TIME ZONE round-trip parity gap: exp.AtTimeZone (core.py:2267, a plain
+	// Expression - `x AT TIME ZONE zone`, parsed by _parse_at_time_zone), and
+	// exp.PseudoType/exp.ObjectIdentifier (datatypes.py:439,443 - both DataType
+	// subclasses with arg_types={"this": True}, but "this" holds the raw uppercased
+	// token text rather than a DType, so they get their own Kinds/dispatch rather than
+	// reusing KindDataType). None of the three have a Condition/Predicate/... mixin
+	// upstream, so none get a traitsOf row below.
+	KindAtTimeZone
+	KindPseudoType
+	KindObjectIdentifier
+	// KindStruct is exp.Struct (array.py:355, `class Struct(Expression, Func)`,
+	// is_var_len_args=True): the constructor produced by _parse_types' inline
+	// values-suffix, e.g. STRUCT<a INT, b STRING>(1, 'foo') -> CAST(STRUCT(1, 'foo')
+	// AS STRUCT<a INT, b TEXT>). Renders through the generic TraitFunc fallback
+	// (STRUCT(...)), matching upstream struct_sql for non-named-field constructors.
+	KindStruct
 )
 
 type Trait uint32
@@ -606,6 +623,13 @@ var argTypes = map[Kind][]argSpec{
 	// LogicalOr (aggregate.py:171) has no arg_types override, i.e. inherits the base
 	// Expression default (mirroring e.g. KindStddev above).
 	KindLogicalOr: defaultArgTypes,
+	// AtTimeZone (core.py:2267/2268) and PseudoType/ObjectIdentifier (datatypes.py:
+	// 439-444).
+	KindAtTimeZone:       {{"this", true}, {"zone", true}},
+	KindPseudoType:       defaultArgTypes,
+	KindObjectIdentifier: defaultArgTypes,
+	// Struct (array.py:356): arg_types = {"expressions": False}.
+	KindStruct: {{"expressions", false}},
 }
 
 var traitsOf = map[Kind]Trait{
@@ -738,6 +762,9 @@ var traitsOf = map[Kind]Trait{
 	// KindTableAlias above).
 	KindReplace:   TraitCondition | TraitFunc,
 	KindLogicalOr: TraitCondition | TraitFunc | TraitAggFunc,
+	// Struct is `class Struct(Expression, Func)` and Func(Condition) (core.py:1641),
+	// so it carries both mixins - same as KindArray above.
+	KindStruct: TraitCondition | TraitFunc,
 }
 
 var primitive = map[Kind]bool{
@@ -998,6 +1025,10 @@ var className = map[Kind]string{
 	KindLambda:                              "Lambda",
 	KindReplace:                             "Replace",
 	KindLogicalOr:                           "LogicalOr",
+	KindAtTimeZone:                          "AtTimeZone",
+	KindPseudoType:                          "PseudoType",
+	KindObjectIdentifier:                    "ObjectIdentifier",
+	KindStruct:                              "Struct",
 }
 
 // varLenArgs is the authoritative is_var_len_args=True set (mirroring the upstream Func
@@ -1015,6 +1046,7 @@ var varLenArgs = map[Kind]bool{
 	KindGreatest:          true,
 	KindLeast:             true,
 	KindArray:             true,
+	KindStruct:            true,
 	KindJSONExtract:       true,
 	KindJSONExtractScalar: true,
 	KindDate:              true,

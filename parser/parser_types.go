@@ -16,15 +16,106 @@ func dataTypeArgs(dtype any, expressions []exp.Expression, nested bool) exp.Args
 	return args
 }
 
+// parseUserDefinedType ports the base _parse_user_defined_type (parser.py:6231-6237) and
+// the postgres override (parsers/postgres.py:339-347). Base joins the dotted parts into a
+// single string and re-parses it via DataType.from_str(name, dialect, udt=True): on the UDT
+// fallback (the name doesn't re-parse as a real type) "kind" ends up that plain string.
+// Postgres instead builds an Identifier/Dot chain and calls DataType.build(chain, udt=True)
+// directly, so "kind" is an expression that preserves each part's quoting - needed for
+// `CAST(5 AS "MyType")`/`CAST(5 AS "MySchema"."MyType")` to round-trip exactly (dataTypeSQL's
+// USERDEFINED branch already renders "kind" generically via sqlKey, whether it's a string or
+// an expression).
+func (p *Parser) parseUserDefinedType(identifier exp.Expression) exp.Expression {
+	if p.dialect.Name == "postgres" {
+		udtType := identifier
+		for p.match(tokens.DOT) {
+			if part := p.parseIdVar(true, nil); part != nil {
+				udtType = p.expression(exp.Dot(exp.Args{"this": udtType, "expression": part}), nil, nil)
+			}
+		}
+		result, err := exp.DataTypeBuild(udtType, "", true, false, nil)
+		if err != nil {
+			return nil
+		}
+		return result
+	}
+
+	typeName := identifier.Name()
+	for p.match(tokens.DOT) {
+		if tok := p.advanceAny(false); tok != nil {
+			typeName += "." + tok.Text
+		}
+	}
+	result, err := exp.DataTypeBuild(typeName, p.dialect.Name, true, false, nil)
+	if err != nil {
+		return nil
+	}
+	return result
+}
+
 func (p *Parser) parseTypes(checkFunc, schema, allowIdentifiers, withCollation bool) exp.Expression {
 	index := p.index
 	var this exp.Expression
+	var typeToken tokens.TokenType // zero value is "no token", since real TokenTypes start at 1
 
-	if !p.matchSet(typeTokens) {
-		// TODO(1d/slice3): UDT identifier fallback via DataType.from_str(udt=True).
-		return nil
+	// mysql adds TokenType.SET to TYPE_TOKENS/ENUM_TYPE_TOKENS (mysql.py:280-287); rather
+	// than mutating the global typeTokens (which would leak SET-as-type into base/postgres),
+	// match it inline for the mysql dialect only, then treat it as an enum below.
+	if p.matchSet(typeTokens) || (p.dialect.Name == "mysql" && p.match(tokens.SET)) {
+		typeToken = p.prev.TokenType
+	} else {
+		var identifier exp.Expression
+		if allowIdentifiers {
+			identifier = p.parseIdVar(false, map[tokens.TokenType]bool{tokens.VAR: true})
+		}
+		if identifier == nil || identifier.Kind() != exp.KindIdentifier {
+			return nil
+		}
+
+		subTokens, tokErr := p.dialect.NewTokenizer().Tokenize(identifier.Name())
+		if tokErr != nil {
+			subTokens = nil
+		}
+
+		// mysql adds TokenType.SET to TYPE_TOKENS (mysql.py:280-287) but we keep it out of
+		// the global typeTokens map (see the direct-match note above), so recognize it inline
+		// here too - otherwise a back-ticked SET type, e.g. CAST(x AS `SET`('a', 'b')), fails
+		// to re-parse as a type and falls through to the UDT/retreat path.
+		firstIsType := len(subTokens) > 0 &&
+			(typeTokens[subTokens[0].TokenType] ||
+				(p.dialect.Name == "mysql" && subTokens[0].TokenType == tokens.SET))
+		if firstIsType {
+			typeToken = subTokens[0].TokenType
+			if len(subTokens) > 1 {
+				// A quoted multi-word type name (e.g. `"double precision"`), re-parsed
+				// without udt=True (parser.py:6264: `exp.DataType.from_str(identifier.name,
+				// dialect=self.dialect)`), so upstream lets a ParseError here propagate as a
+				// hard failure rather than falling back to a UDT. This port degrades to a
+				// benign nil (-> the caller's normal retreat/fallback path) instead, which is
+				// safer and not corpus-visible.
+				result, err := exp.DataTypeBuild(identifier.Name(), p.dialect.Name, false, true, nil)
+				if err != nil {
+					return nil
+				}
+				return result
+			}
+			// len(subTokens) == 1: fall through using the discovered typeToken, exactly as
+			// if it had been matched directly (parser.py:6262-6263).
+		} else if p.dialect.SupportsUserDefinedTypes {
+			this = p.parseUserDefinedType(identifier)
+		} else {
+			p.retreat(p.index - 1)
+			return nil
+		}
 	}
-	typeToken := p.prev.TokenType
+
+	if typeToken == tokens.PSEUDO_TYPE {
+		return p.expression(exp.PseudoType(exp.Args{"this": stringsUpper(p.prev.Text)}), nil, nil)
+	}
+
+	if typeToken == tokens.OBJECT_IDENTIFIER {
+		return p.expression(exp.ObjectIdentifier(exp.Args{"this": stringsUpper(p.prev.Text)}), nil, nil)
+	}
 
 	// https://materialize.com/docs/sql/types/map/
 	if typeToken == tokens.MAP && p.match(tokens.L_BRACKET) {
@@ -46,6 +137,9 @@ func (p *Parser) parseTypes(checkFunc, schema, allowIdentifiers, withCollation b
 	isAggregate := aggregateTypeTokens[typeToken]
 	expressions := []exp.Expression(nil)
 	maybeFunc := false
+	// values captures a trailing inline constructor, e.g. ARRAY<INT>[1, 2] or
+	// STRUCT<a INT>(1) (parser.py:6375-6381); nil means "no constructor suffix".
+	var values []exp.Expression
 
 	if p.match(tokens.L_PAREN) {
 		if isStruct {
@@ -60,7 +154,7 @@ func (p *Parser) parseTypes(checkFunc, schema, allowIdentifiers, withCollation b
 				p.matchRParen(this)
 				return this
 			}
-		} else if enumTypeTokens[typeToken] {
+		} else if enumTypeTokens[typeToken] || (p.dialect.Name == "mysql" && typeToken == tokens.SET) {
 			expressions = p.parseCsv(p.parseEquality)
 		} else if isAggregate {
 			funcOrIdent := p.parseFunction(nil, true, true, false)
@@ -68,7 +162,7 @@ func (p *Parser) parseTypes(checkFunc, schema, allowIdentifiers, withCollation b
 				funcOrIdent = p.parseIdVar(false, map[tokens.TokenType]bool{tokens.VAR: true, tokens.ANY: true})
 			}
 			if funcOrIdent == nil {
-				p.retreat(index)
+				// Upstream returns bare (parser.py:6331-6332), without retreating.
 				return nil
 			}
 			expressions = []exp.Expression{funcOrIdent}
@@ -100,7 +194,20 @@ func (p *Parser) parseTypes(checkFunc, schema, allowIdentifiers, withCollation b
 		if !p.match(tokens.GT) {
 			p.raiseError("Expecting >")
 		}
-		// TODO(1d/slice3): inline constructor suffix STRUCT<..>(..) -> Cast.
+
+		// Inline constructor suffix (parser.py:6375-6381): ARRAY<INT>[1, 2] /
+		// STRUCT<a INT>(1, 'foo') capture their values here and get wrapped in a Cast
+		// below. An empty pair on a struct (STRUCT<..>()) is not a constructor, so we
+		// retreat past the opening bracket and leave it for the caller.
+		if p.match(tokens.L_BRACKET) || p.match(tokens.L_PAREN) {
+			values = p.parseCsv(p.parseDisjunction)
+			if len(values) == 0 && isStruct {
+				values = nil
+				p.retreat(p.index - 1)
+			} else if !p.match(tokens.R_BRACKET) {
+				p.match(tokens.R_PAREN)
+			}
+		}
 	}
 
 	if timestampsTokens[typeToken] {
@@ -131,8 +238,15 @@ func (p *Parser) parseTypes(checkFunc, schema, allowIdentifiers, withCollation b
 		this = p.expression(exp.DataType(exp.Args{"this": exp.DTypeNull}), nil, nil)
 	}
 
-	// TODO(1d): check_func typed-literal peek path.
-	_ = maybeFunc
+	if maybeFunc && checkFunc {
+		index2 := p.index
+		peek := p.parseString()
+		if peek == nil {
+			p.retreat(index)
+			return nil
+		}
+		p.retreat(index2)
+	}
 
 	if this == nil {
 		if p.matchTextSeq("UNSIGNED") {
@@ -156,6 +270,17 @@ func (p *Parser) parseTypes(checkFunc, schema, allowIdentifiers, withCollation b
 			return nil
 		}
 		this = p.expression(exp.DataType(dataTypeArgs(dtype, expressions, nested)), nil, nil)
+
+		// Empty arrays/structs are allowed (parser.py:6436-6438): a captured inline
+		// constructor becomes CAST(<ARRAY|STRUCT>(values) AS <type>). parseType's
+		// KindCast fast-path (parser.go) then returns this straight through parseColumnOps.
+		if values != nil {
+			ctor := exp.Array(exp.Args{"expressions": values})
+			if isStruct {
+				ctor = exp.Struct(exp.Args{"expressions": values})
+			}
+			this = p.expression(exp.Cast(exp.Args{"this": ctor, "to": this}), nil, nil)
+		}
 	} else if len(expressions) > 0 {
 		this.Set("expressions", expressions)
 	}
@@ -174,7 +299,7 @@ func (p *Parser) parseTypes(checkFunc, schema, allowIdentifiers, withCollation b
 			break
 		}
 		matchedArray = false
-		values := p.parseCsv(p.parseDisjunction)
+		values = p.parseCsv(p.parseDisjunction)
 		if len(values) > 0 && !schema && (!p.dialect.SupportsFixedSizeArrays || datatypeToken == tokens.ARRAY || !p.match(tokens.R_BRACKET, false)) {
 			p.retreat(index)
 			break
@@ -198,23 +323,36 @@ func (p *Parser) parseTypes(checkFunc, schema, allowIdentifiers, withCollation b
 	return this
 }
 
+// parseStructTypes ports _parse_struct_types (parser.py:6523-6551). Both call sites in
+// parseTypes pass type_required=True, so that parameter is inlined rather than threaded
+// through as an argument.
 func (p *Parser) parseStructTypes() exp.Expression {
-	// Simplified vs parser.py:6523: parse a field name plus a following type, or a positional type.
 	index := p.index
-	name := p.parseIdVar(false, nil)
-	if name != nil {
-		p.match(tokens.COLON)
-		kind := p.parseTypes(false, false, true, false)
-		if kind != nil {
-			return p.expression(exp.ColumnDef(exp.Args{"this": name, "kind": kind}), nil, nil)
+
+	var this exp.Expression
+	if p.curr.IsValid() && p.next.IsValid() && typeTokens[p.curr.TokenType] && typeTokens[p.next.TokenType] {
+		// Handles cases like `STRUCT<list ARRAY<...>>` where the field name is itself a type
+		// token: without this, "list" would be parsed as a (positional) type and crash.
+		this = p.parseIdVar(true, nil)
+	} else {
+		this = p.parseType(false, true)
+		if this == nil {
+			this = p.parseIdVar(true, nil)
 		}
-		p.retreat(index)
 	}
-	return p.parseTypes(false, false, true, false)
+
+	p.match(tokens.COLON)
+
+	if (this == nil || this.Kind() != exp.KindDataType) && !p.matchSet(typeTokens, false) {
+		p.retreat(index)
+		return p.parseTypes(false, false, true, false)
+	}
+
+	return p.parseColumnDef(this)
 }
 
 func (p *Parser) parseTypeSize() exp.Expression {
-	this := p.parseType()
+	this := p.parseType(true, false)
 	if this == nil {
 		return nil
 	}
@@ -242,6 +380,13 @@ func (p *Parser) parseCast(strict bool, safe any) exp.Expression {
 	}
 	if to == nil {
 		p.raiseError("Expected TYPE after CAST")
+	} else if exp.IsType(to, exp.DTypeChar) && p.match(tokens.CHARACTER_SET) {
+		// parser.py:7900-7901 (elif branch): CAST(x AS CHAR CHARACTER SET <cs>) captures the
+		// charset via the synthetic CHARACTER_SET data type; the generator renders it as
+		// `CHAR CHARACTER SET <kind>` (generator/sql.go:1472-1473). FORMAT/COMMA and the
+		// isinstance(to, Identifier) elif branches (parser.py:7870-7897) are deferred - no
+		// corpus case in this slice exercises them.
+		to = exp.DTypeCharacterSet.IntoExpr(exp.Args{"kind": p.parseVarOrString(false)})
 	}
 	args := exp.Args{"this": this, "to": to, "default": default_, "action": p.parseVarFromOptions(castActions, false)}
 	if safe != nil {

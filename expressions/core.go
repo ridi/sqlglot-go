@@ -1357,6 +1357,7 @@ func Hint(args Args) Expression        { return newNode(KindHint, args) }
 func Placeholder(args Args) Expression { return newNode(KindPlaceholder, args) }
 func Parameter(args Args) Expression   { return newNode(KindParameter, args) }
 func RawString(args Args) Expression   { return newNode(KindRawString, args) }
+func AtTimeZone(args Args) Expression  { return newNode(KindAtTimeZone, args) }
 
 func LiteralNumber(number any) Expression {
 	text := fmt.Sprint(number)

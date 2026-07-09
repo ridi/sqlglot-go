@@ -220,21 +220,24 @@ func writeGaps(fails map[gapKey]string) error {
 }
 
 // Pass counts observed from a full local run over Scope A (identity.sql) plus
-// Scope B (dialect_identity.jsonl): base 871/955, mysql 333/424, postgres
-// 358/468 (after the generator-fidelity parity slice: Lambda/Replace node
-// support with the corrected LISTAGG round-trip, dialect-aware
-// interval/cast/trim/data-type rendering, postgres SUBSTRING FROM/FOR +
-// Variance/VariancePop renames, and the MySQL/Postgres TryCast -> plain CAST
-// fix). LENGTH/CHAR_LENGTH canonicalization is deliberately deferred (ROADMAP
-// 5b per-dialect FUNCTIONS; see expressions/functions.go), so postgres
-// CHAR_LENGTH/CHARACTER_LENGTH stay in parity_gaps.txt. These are monotonic
+// Scope B (dialect_identity.jsonl): base 880/955, mysql 336/424, postgres
+// 385/468 (after the TYPE/CAST/`::`/AT TIME ZONE parity slice: faithful ports of
+// upstream _parse_type/_parse_types/_parse_at_time_zone/_parse_atom close `1::int`-style
+// literal casts, bare `ARRAY<...>`/`STRUCT<...>` type expressions, `x AT TIME ZONE zone`
+// (chainable, any dialect), postgres PSEUDO_TYPE/OBJECT_IDENTIFIER round-trips
+// (`x::regclass`/`x::cstring`/...), postgres user-defined-type CAST targets
+// (`CAST(5 AS "MySchema"."MyType")`), the mysql SET(...) enum type as a CAST target and the
+// `CHAR CHARACTER SET <cs>` charset suffix; mysql's attimezone_sql override drops the zone and
+// flags the query unsupported, matching upstream). LENGTH/CHAR_LENGTH canonicalization is
+// deliberately deferred (ROADMAP 5b per-dialect FUNCTIONS; see expressions/functions.go),
+// so postgres CHAR_LENGTH/CHARACTER_LENGTH stay in parity_gaps.txt. These are monotonic
 // pass floors — raise them as coverage improves, never lower them to mask a
 // regression. A drop below any floor fails the build even if the regressing
 // case is also (illegitimately) added to parity_gaps.txt.
 const (
-	minPassBase     = 871
-	minPassMySQL    = 333
-	minPassPostgres = 358
+	minPassBase     = 880
+	minPassMySQL    = 336
+	minPassPostgres = 385
 )
 
 // Minimum record counts per corpus, from the committed fixtures (identity.sql:

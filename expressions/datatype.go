@@ -283,6 +283,12 @@ func DataTypeParam(args Args) Expression { return newNode(KindDataTypeParam, arg
 func Interval(args Args) Expression      { return newNode(KindInterval, args) }
 func IntervalSpan(args Args) Expression  { return newNode(KindIntervalSpan, args) }
 
+// PseudoType/ObjectIdentifier port exp.PseudoType/exp.ObjectIdentifier (datatypes.py:
+// 439-444): DataType subclasses whose "this" holds the raw uppercased token text (e.g.
+// "CSTRING"/"REGCLASS") rather than a DType constant.
+func PseudoType(args Args) Expression       { return newNode(KindPseudoType, args) }
+func ObjectIdentifier(args Args) Expression { return newNode(KindObjectIdentifier, args) }
+
 var StructTypes = map[DType]bool{
 	DTypeFile:   true,
 	DTypeNested: true,

@@ -153,4 +153,7 @@ func init() {
 	dispatch[expressions.KindParameter] = (*Generator).parameterSQL
 	dispatch[expressions.KindRawString] = (*Generator).rawStringSQL
 	dispatch[expressions.KindFileFormatProperty] = (*Generator).fileFormatPropertySQL
+	dispatch[expressions.KindAtTimeZone] = (*Generator).atTimeZoneSQL
+	dispatch[expressions.KindPseudoType] = (*Generator).pseudoTypeSQL
+	dispatch[expressions.KindObjectIdentifier] = (*Generator).objectIdentifierSQL
 }

@@ -1,8 +1,10 @@
 package parser_test
 
 import (
+	"strings"
 	"testing"
 
+	sqlglot "github.com/sjincho/sqlglot-go"
 	exp "github.com/sjincho/sqlglot-go/expressions"
 )
 
@@ -200,5 +202,189 @@ func TestIntervalLiteral(t *testing.T) {
 		if got := exprArg(t, iv, "this").Name(); got != tc.want {
 			t.Fatalf("%s: interval value = %q, want %q:\n%s", tc.sql, got, tc.want, iv.ToS())
 		}
+	}
+}
+
+// TestParseLiteralDcolonCast ports the parseAtom/parseType round-trip gap: a NUMBER/STRING
+// literal immediately followed by a column operator (`::`, `.`, `[`, ...) must NOT be
+// consumed directly by parseAtom (parser.py:6560-6583's COLUMN_OPERATORS/COLUMN_POSTFIX_TOKENS
+// guard), so it instead flows through parseColumn -> parseColumnOps and gets the cast/bracket
+// handling. Before this port, `1::int` (a bare literal head) failed to parse entirely.
+func TestParseLiteralDcolonCast(t *testing.T) {
+	for _, sql := range []string{"1::int", "'x'::int"} {
+		cast := parseOne(t, sql)
+		if cast.Kind() != exp.KindCast || exprArg(t, cast, "this").Kind() != exp.KindLiteral || !exp.IsType(exprArg(t, cast, "to"), exp.DTypeInt) {
+			t.Fatalf("%s: literal dcolon cast mismatch:\n%s", sql, cast.ToS())
+		}
+		got, err := generateSQL(t, cast, "")
+		if err != nil {
+			t.Fatalf("%s: Generate: %v", sql, err)
+		}
+		if want := "CAST(" + sql[:strings.Index(sql, "::")] + " AS INT)"; got != want {
+			t.Fatalf("%s: round-trip = %q, want %q", sql, got, want)
+		}
+	}
+}
+
+// TestParseBareTypeExpression ports the parseType top-level DataType round-trip (parser.py:
+// 6155-6217): a bare `ARRAY<...>`/`STRUCT<...>` type expression (no CAST/`::` wrapper) parses
+// to a DataType, and STRUCT<int INT> exercises the double-type-token guard in parseStructTypes
+// (parser.py:6526-6534: the field name "int" is itself a TYPE_TOKEN).
+func TestParseBareTypeExpression(t *testing.T) {
+	for _, sql := range []string{"ARRAY<TEXT>", "ARRAY<STRUCT<INT, DOUBLE, ARRAY<INT>>>", "STRUCT<int INT>"} {
+		dtype := parseOne(t, sql)
+		if dtype.Kind() != exp.KindDataType {
+			t.Fatalf("%s: kind = %v, want DataType:\n%s", sql, dtype.Kind(), dtype.ToS())
+		}
+		got, err := generateSQL(t, dtype, "")
+		if err != nil {
+			t.Fatalf("%s: Generate: %v", sql, err)
+		}
+		if got != sql {
+			t.Fatalf("%s: round-trip = %q, want %q", sql, got, sql)
+		}
+	}
+}
+
+// TestParseInlineConstructor covers _parse_types' values-suffix (parser.py:6375-6381,
+// 6436-6438): ARRAY<INT>[1, 2] / STRUCT<a INT>(1, 'foo') build a Cast of an Array/Struct
+// constructor to the nested type, returned through parseType's KindCast fast-path.
+func TestParseInlineConstructor(t *testing.T) {
+	arr := parseOne(t, "ARRAY<INT>[1, 2]")
+	if arr.Kind() != exp.KindCast {
+		t.Fatalf("array constructor kind = %v, want Cast:\n%s", arr.Kind(), arr.ToS())
+	}
+	if inner := exprArg(t, arr, "this"); inner.Kind() != exp.KindArray {
+		t.Fatalf("array constructor `this` = %v, want Array:\n%s", inner.Kind(), arr.ToS())
+	}
+	if to := exprArg(t, arr, "to"); !exp.IsType(to, exp.DTypeArray) {
+		t.Fatalf("array constructor `to` not ARRAY:\n%s", arr.ToS())
+	}
+
+	st := parseOne(t, "STRUCT<a INT, b STRING>(1, 'foo')")
+	if st.Kind() != exp.KindCast {
+		t.Fatalf("struct constructor kind = %v, want Cast:\n%s", st.Kind(), st.ToS())
+	}
+	if inner := exprArg(t, st, "this"); inner.Kind() != exp.KindStruct {
+		t.Fatalf("struct constructor `this` = %v, want Struct:\n%s", inner.Kind(), st.ToS())
+	}
+}
+
+// TestParseAtTimeZone ports _parse_at_time_zone (parser.py:6553-6558), wired into
+// _parse_factor (parser.py:6119-6121): `<this> AT TIME ZONE <zone>`, right-nesting on repeat,
+// and available for any operand (column, function call, or a parenthesized CAST).
+func TestParseAtTimeZone(t *testing.T) {
+	atz := parseOne(t, "x AT TIME ZONE 'UTC'")
+	if atz.Kind() != exp.KindAtTimeZone || exprArg(t, atz, "this").Kind() != exp.KindColumn {
+		t.Fatalf("AT TIME ZONE mismatch:\n%s", atz.ToS())
+	}
+	if zone := exprArg(t, atz, "zone"); zone.Kind() != exp.KindLiteral || zone.Name() != "UTC" {
+		t.Fatalf("AT TIME ZONE zone mismatch:\n%s", atz.ToS())
+	}
+
+	chained := parseOne(t, "CURRENT_DATE AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Tokyo'")
+	if chained.Kind() != exp.KindAtTimeZone {
+		t.Fatalf("chained AT TIME ZONE kind = %v, want AtTimeZone:\n%s", chained.Kind(), chained.ToS())
+	}
+	inner := exprArg(t, chained, "this")
+	if inner.Kind() != exp.KindAtTimeZone {
+		t.Fatalf("chained AT TIME ZONE should nest, got inner kind %v:\n%s", inner.Kind(), chained.ToS())
+	}
+
+	for _, sql := range []string{
+		"x AT TIME ZONE 'UTC'",
+		"CURRENT_DATE AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Tokyo'",
+		"CURRENT_DATE AT TIME ZONE zone_column",
+		"CAST('2025-11-20 00:00:00+00' AS TIMESTAMP) AT TIME ZONE 'Africa/Cairo'",
+	} {
+		root := parseOne(t, sql)
+		got, err := generateSQL(t, root, "")
+		if err != nil {
+			t.Fatalf("%s: Generate: %v", sql, err)
+		}
+		if got != sql {
+			t.Fatalf("%s: round-trip = %q, want %q", sql, got, sql)
+		}
+	}
+
+	// MySQL has no AT TIME ZONE syntax: it parses (so the zone doesn't leak into trailing
+	// unconsumed tokens) but the generator drops the zone (generators/mysql.py:796-798).
+	mysqlATZ := parseOneDialect(t, "SELECT foo AT TIME ZONE 'UTC'", "mysql")
+	got, err := generateSQL(t, mysqlATZ, "mysql")
+	if err != nil {
+		t.Fatalf("mysql AT TIME ZONE: Generate: %v", err)
+	}
+	if want := "SELECT foo"; got != want {
+		t.Fatalf("mysql AT TIME ZONE round-trip = %q, want %q", got, want)
+	}
+}
+
+// TestParsePseudoTypeAndObjectIdentifier ports the PSEUDO_TYPE/OBJECT_IDENTIFIER branches of
+// parseTypes (parser.py:6273-6277): postgres pseudo-types (CSTRING) and object identifier
+// types (OID/REGCLASS/...) round-trip as their own node kinds, not KindDataType.
+func TestParsePseudoTypeAndObjectIdentifier(t *testing.T) {
+	cstring := exprArg(t, parseOneDialect(t, "x::cstring", "postgres"), "to")
+	if cstring.Kind() != exp.KindPseudoType || cstring.Name() != "CSTRING" {
+		t.Fatalf("PSEUDO_TYPE mismatch:\n%s", cstring.ToS())
+	}
+
+	regclass := exprArg(t, parseOneDialect(t, "x::regclass", "postgres"), "to")
+	if regclass.Kind() != exp.KindObjectIdentifier || regclass.Name() != "REGCLASS" {
+		t.Fatalf("OBJECT_IDENTIFIER mismatch:\n%s", regclass.ToS())
+	}
+
+	for _, sql := range []string{"x::cstring", "x::oid", "x::regclass", "x::regtype"} {
+		root := parseOneDialect(t, sql, "postgres")
+		got, err := generateSQL(t, root, "postgres")
+		if err != nil {
+			t.Fatalf("%s: Generate: %v", sql, err)
+		}
+		want := "CAST(x AS " + strings.ToUpper(sql[strings.Index(sql, "::")+2:]) + ")"
+		if got != want {
+			t.Fatalf("%s: round-trip = %q, want %q", sql, got, want)
+		}
+	}
+}
+
+// TestParseUserDefinedType ports the identifier-fallback half of parseTypes (parser.py:
+// 6253-6271) plus parseUserDefinedType (parser.py:6231-6237, and the postgres override at
+// parsers/postgres.py:339-347): a type name that isn't a TYPE_TOKEN falls back to a
+// user-defined DataType. Base joins dotted parts into a plain string "kind"; postgres instead
+// builds an Identifier/Dot chain so quoting round-trips exactly. MySQL has
+// SUPPORTS_USER_DEFINED_TYPES=false, so it must error instead of silently misparsing.
+func TestParseUserDefinedType(t *testing.T) {
+	base := exprArg(t, parseOne(t, "CAST(x AS FOO)"), "to")
+	if !exp.IsType(base, exp.DTypeUserDefined) || base.Arg("kind") != "FOO" {
+		t.Fatalf("base UDT fallback mismatch (want plain-string kind):\n%s", base.ToS())
+	}
+
+	for _, sql := range []string{
+		`CAST(5 AS "MyType")`,
+		`CAST(5 AS "MySchema"."MyType")`,
+		`CAST(5 AS "MyCatalog"."MySchema"."MyType")`,
+		`CAST(5 AS MySchema."MyType")`,
+		`CAST(5 AS MySchema.MyType)`,
+		`CAST(5 AS MyType)`,
+	} {
+		root := parseOneDialect(t, sql, "postgres")
+		to := exprArg(t, root, "to")
+		if !exp.IsType(to, exp.DTypeUserDefined) {
+			t.Fatalf("%s: to.this = %v, want USERDEFINED:\n%s", sql, to.Arg("this"), root.ToS())
+		}
+		kind := to.Arg("kind")
+		if _, isExpr := kind.(exp.Expression); !isExpr {
+			t.Fatalf("%s: postgres UDT kind should be an Identifier/Dot expression, got %#v:\n%s", sql, kind, root.ToS())
+		}
+		got, err := generateSQL(t, root, "postgres")
+		if err != nil {
+			t.Fatalf("%s: Generate: %v", sql, err)
+		}
+		if got != sql {
+			t.Fatalf("%s: round-trip = %q, want %q", sql, got, sql)
+		}
+	}
+
+	if _, err := sqlglot.ParseOne("CAST(x AS FOO)", "mysql"); err == nil {
+		t.Fatalf("mysql CAST to an unrecognized type name should error (SUPPORTS_USER_DEFINED_TYPES=false)")
 	}
 }

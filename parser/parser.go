@@ -1173,7 +1173,10 @@ var factorTokens = map[tokens.TokenType]func(exp.Args) exp.Expression{
 }
 
 func (p *Parser) parseFactor() exp.Expression {
-	this := p.parseUnary()
+	// EXPONENT is empty for base/mysql/postgres, so parse_method is always _parse_unary
+	// (parser.py:6119-6121); only the first parse_method() call is wrapped in
+	// _parse_at_time_zone, not the ones inside the loop below.
+	this := p.parseAtTimeZone(p.parseUnary())
 	for constructor, ok := factorTokens[p.curr.TokenType]; ok; constructor, ok = factorTokens[p.curr.TokenType] {
 		tokenType := p.curr.TokenType
 		p.advance()
@@ -1201,60 +1204,149 @@ func (p *Parser) parseUnary() exp.Expression {
 		// `NOT a = b` -> Not(EQ(a, b)), `NOT a IN (..)` -> Not(In(a, ..)).
 		return p.expression(exp.Not(exp.Args{"this": p.parseEquality()}), nil, p.prevComments)
 	}
-	return p.parseType()
+	return p.parseType(true, false)
 }
 
-func (p *Parser) parseType() exp.Expression {
-	if typed := p.parseTypedStringLiteral(); typed != nil {
-		return typed
+// parseType ports _parse_type (parser.py:6155-6217): try a plain atom first (unless
+// fallbackToIdentifier), then INTERVAL, then a type-token prefix. A parsed type immediately
+// followed by a literal builds a typed literal (`DATE '2020-01-01'`, and generally
+// `<TYPE> '<lit>'` for any type token, not just a hardcoded DATE/DATETIME/TIMESTAMP/
+// TIMESTAMPTZ set) as a Cast; a type that consumed more than its own keyword (e.g.
+// `DECIMAL(38, 0)`) but isn't followed by a literal is itself the result; otherwise this
+// wasn't a type after all and falls back to a plain column/identifier reference.
+func (p *Parser) parseType(parseInterval, fallbackToIdentifier bool) exp.Expression {
+	if !fallbackToIdentifier {
+		if atom := p.parseAtom(); atom != nil {
+			return atom
+		}
 	}
-	if atom := p.parseAtom(); atom != nil {
-		return atom
+
+	if parseInterval {
+		if interval := p.parseInterval(true); interval != nil {
+			return p.parseColumnOps(interval)
+		}
 	}
-	if interval := p.parseInterval(true); interval != nil {
-		return p.parseColumnOps(interval)
+
+	index := p.index
+	dataType := p.parseTypes(true, false, false, false)
+
+	// parseTypes can return a Cast when it parses BQ's inline constructor <type>(<values>),
+	// e.g. STRUCT<a INT, b STRING>(1, 'foo') - deferred (see parseTypes' TODO), but this
+	// dispatch is kept ready for when that lands.
+	if dataType != nil && dataType.Kind() == exp.KindCast {
+		return p.parseColumnOps(dataType)
 	}
+
+	if dataType != nil {
+		index2 := p.index
+		this := p.parsePrimary()
+
+		if this != nil && this.Kind() == exp.KindLiteral {
+			this = p.parseColumnOps(this)
+
+			// TYPE_LITERAL_PARSERS (parser.py:1562-1564) maps only DType.JSON -> ParseJSON in
+			// the base parser; ParseJSON isn't modeled by this port yet (out of this parity
+			// slice's scope). ZONE_AWARE_TIMESTAMP_CONSTRUCTOR (parser.py:6186-6191) is
+			// Presto-only, never set by base/mysql/postgres - also omitted.
+			return p.expression(exp.Cast(exp.Args{"this": this, "to": dataType}), nil, nil)
+		}
+
+		if len(dataType.Expressions()) > 0 && index2-index > 1 {
+			p.retreat(index2)
+			return p.parseColumnOps(dataType)
+		}
+
+		p.retreat(index)
+	}
+
+	if fallbackToIdentifier {
+		return p.parseIdVar(false, nil)
+	}
+
 	return p.parseColumn()
 }
 
-func (p *Parser) parseTypedStringLiteral() exp.Expression {
-	switch p.curr.TokenType {
-	case tokens.DATE, tokens.DATETIME, tokens.TIMESTAMP, tokens.TIMESTAMPTZ:
-		if p.next.TokenType != tokens.STRING {
-			return nil
-		}
-		typeToken := p.curr
-		p.advance()
-		stringToken := p.curr
-		p.advance()
-		to, err := exp.DataTypeBuild(stringsUpper(typeToken.Text), "", p.dialect.SupportsUserDefinedTypes, true, nil)
-		if err != nil {
-			p.raiseError(err.Error(), typeToken)
-			return nil
-		}
-		literal := p.expression(exp.LiteralString(stringToken.Text), &stringToken, nil)
-		return p.expression(exp.Cast(exp.Args{"this": literal, "to": to}), &typeToken, nil)
-	default:
-		return nil
+// primaryParsers ports the base PRIMARY_PARSERS (parser.py:1122-1173: STRING_PARSERS +
+// NUMERIC_PARSERS + NULL/TRUE/FALSE/STAR). NATIONAL_STRING/UNICODE_STRING/BIT_STRING/
+// BYTE_STRING/HEX_STRING/INTRODUCER/SESSION_PARAMETER entries are omitted: those node kinds
+// aren't modeled by this port yet.
+//
+// Declared as an empty map + func init() assignment (rather than a map literal) because a
+// literal here would create a Go initialization-cycle: primaryParsers' STAR entry calls
+// parseStarOps, which transitively calls back into code that references primaryParsers
+// (parseType -> ... -> parseAtom), and Go's initialization-order analysis doesn't allow that
+// for package-level var literals (mirrors generator/dispatch.go's identical workaround).
+var primaryParsers = map[tokens.TokenType]func(*Parser, tokens.Token) exp.Expression{}
+
+func init() {
+	primaryParsers[tokens.STRING] = func(p *Parser, token tokens.Token) exp.Expression {
+		return p.expression(exp.LiteralString(token.Text), &token, nil)
+	}
+	primaryParsers[tokens.HEREDOC_STRING] = func(p *Parser, token tokens.Token) exp.Expression {
+		return p.expression(exp.RawString(exp.Args{"this": token.Text}), &token, nil)
+	}
+	primaryParsers[tokens.RAW_STRING] = func(p *Parser, token tokens.Token) exp.Expression {
+		return p.expression(exp.RawString(exp.Args{"this": token.Text}), &token, nil)
+	}
+	primaryParsers[tokens.NUMBER] = func(p *Parser, token tokens.Token) exp.Expression {
+		return p.expression(exp.LiteralNumber(token.Text), &token, nil)
+	}
+	primaryParsers[tokens.NULL] = func(p *Parser, token tokens.Token) exp.Expression {
+		return p.expression(exp.Null(), &token, nil)
+	}
+	primaryParsers[tokens.TRUE] = func(p *Parser, token tokens.Token) exp.Expression {
+		return p.expression(exp.Boolean(exp.Args{"this": true}), &token, nil)
+	}
+	primaryParsers[tokens.FALSE] = func(p *Parser, token tokens.Token) exp.Expression {
+		return p.expression(exp.Boolean(exp.Args{"this": false}), &token, nil)
+	}
+	primaryParsers[tokens.STAR] = func(p *Parser, token tokens.Token) exp.Expression {
+		return p.parseStarOps(token)
 	}
 }
 
+// parseAtom ports _parse_atom (parser.py:6560-6583): a simple column reference, or a
+// PRIMARY_PARSERS literal that isn't immediately followed by a column operator/postfix token
+// (that case is deferred to parseColumn -> parseColumnOps instead, so e.g. `1::int` gets cast
+// handling rather than the first literal being consumed here with no further column-op
+// processing). The STRING-followed-by-STRING bail below mirrors upstream, which routes
+// adjacent string literals to CONCAT; that adjacency->CONCAT rewrite is separately deferred in
+// this port (ROADMAP), so for now `'a' 'b'` falls through to plain alias handling instead - the
+// bail is neutral either way (a STRING is not a column op, so parseColumnOps adds nothing).
 func (p *Parser) parseAtom() exp.Expression {
 	if identifierTokens[p.curr.TokenType] {
 		if column := p.parseColumn(); column != nil {
 			return column
 		}
 	}
+
 	token := p.curr
-	switch token.TokenType {
-	case tokens.STRING, tokens.NUMBER, tokens.NULL, tokens.TRUE, tokens.FALSE:
-		p.advance()
-		return p.primaryFromToken(token)
-	case tokens.STAR:
-		p.advance()
-		return p.parseStarOps(token)
+	tokenType := token.TokenType
+
+	primaryParser, ok := primaryParsers[tokenType]
+	if !ok {
+		return nil
 	}
-	return nil
+
+	// columnFastBailTokens is exactly COLUMN_OPERATORS ∪ COLUMN_POSTFIX_TOKENS (parser.py:
+	// 804-812, 1008-1035; see parser/sets.go's definition for the cross-reference).
+	nextType := p.next.TokenType
+	if columnFastBailTokens[nextType] || (tokenType == tokens.STRING && nextType == tokens.STRING) {
+		return nil
+	}
+
+	p.advance()
+	return primaryParser(p, token)
+}
+
+// parseAtTimeZone ports _parse_at_time_zone (parser.py:6553-6558): `<this> AT TIME ZONE
+// <zone>`, right-associative-by-recursion so `x AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Tokyo'`
+// nests as AtTimeZone(AtTimeZone(x, 'UTC'), 'Asia/Tokyo').
+func (p *Parser) parseAtTimeZone(this exp.Expression) exp.Expression {
+	if !p.matchTextSeq("AT", "TIME", "ZONE") {
+		return this
+	}
+	return p.parseAtTimeZone(p.expression(exp.AtTimeZone(exp.Args{"this": this, "zone": p.parseUnary()}), nil, nil))
 }
 
 func (p *Parser) parseColumn() exp.Expression {
@@ -1451,18 +1543,12 @@ func (p *Parser) parseParen() exp.Expression {
 
 func (p *Parser) parsePrimary() exp.Expression {
 	token := p.curr
-	switch token.TokenType {
-	case tokens.STRING, tokens.NUMBER, tokens.NULL, tokens.TRUE, tokens.FALSE:
+	// Both _parse_primary and _parse_atom (parser.py:6560-6583) dispatch through the single
+	// PRIMARY_PARSERS table; primaryParsers is that shared port (STRING/NUMBER/NULL/TRUE/
+	// FALSE literals, HEREDOC_STRING/RAW_STRING -> RawString, STAR -> parseStarOps).
+	if primaryParser, ok := primaryParsers[token.TokenType]; ok {
 		p.advance()
-		return p.primaryFromToken(token)
-	case tokens.HEREDOC_STRING, tokens.RAW_STRING:
-		// Upstream PRIMARY_PARSERS maps HEREDOC_STRING/RAW_STRING to a RawString (parser.py:1123-1132),
-		// so these are valid in normal expression position, not only via parseString.
-		p.advance()
-		return p.expression(exp.RawString(exp.Args{"this": token.Text}), &token, nil)
-	case tokens.STAR:
-		p.advance()
-		return p.parseStarOps(token)
+		return primaryParser(p, token)
 	}
 	if p.matchPair(tokens.DOT, tokens.NUMBER, true) {
 		return exp.LiteralNumber("0." + p.prev.Text)

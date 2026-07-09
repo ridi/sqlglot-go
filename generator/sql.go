@@ -1517,6 +1517,26 @@ func (g *Generator) dataTypeParamSQL(e expressions.Expression) string {
 	return g.sqlKey(e, "this")
 }
 
+// pseudoTypeSQL/objectIdentifierSQL port generator.py:2316-2320 pseudotype_sql/
+// objectidentifier_sql: both just re-emit the uppercased token text stored in "this"
+// (see parser_types.go parseTypes' PSEUDO_TYPE/OBJECT_IDENTIFIER branches).
+func (g *Generator) pseudoTypeSQL(e expressions.Expression) string { return e.Name() }
+
+func (g *Generator) objectIdentifierSQL(e expressions.Expression) string { return e.Name() }
+
+// atTimeZoneSQL ports generator.py:3995-3998 attimezone_sql, plus mysql's override
+// (generators/mysql.py:796-798): MySQL has no AT TIME ZONE syntax, so it drops the zone
+// entirely and flags the query unsupported, keeping just the wrapped expression.
+func (g *Generator) atTimeZoneSQL(e expressions.Expression) string {
+	if g.dialect.Name == "mysql" {
+		g.unsupported("AT TIME ZONE is not supported by MySQL")
+		return g.sqlKey(e, "this")
+	}
+	this := g.sqlKey(e, "this")
+	zone := g.sqlKey(e, "zone")
+	return this + " AT TIME ZONE " + zone
+}
+
 func (g *Generator) castSQL(e expressions.Expression) string { return g.castSQLWithPrefix(e, "") }
 
 func (g *Generator) castSQLWithPrefix(e expressions.Expression, safePrefix string) string {
