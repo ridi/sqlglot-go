@@ -138,6 +138,48 @@ type Dialect struct {
 	// Parameter's name with (base/mysql use "@", postgres uses "$" for its positional $1/$2/...
 	// placeholders).
 	ParameterToken string
+	// LockingReadsSupported ports the generator flag LOCKING_READS_SUPPORTED (generator.py:314);
+	// mysql (generators/mysql.py:133) and postgres (generators/postgres.py:235) override to True:
+	// whether row-locking read modifiers (FOR UPDATE/SHARE/...) are rendered instead of raising
+	// "unsupported".
+	LockingReadsSupported bool
+	// TablesampleSizeIsPercent ports the dialect flag of the same name (dialects/dialect.py:342);
+	// postgres overrides to true (dialects/postgres.py:20): whether a bare numeric size in
+	// TABLESAMPLE means percent (rather than rows).
+	TablesampleSizeIsPercent bool
+	// TablesampleSizeIsRows ports the generator flag TABLESAMPLE_SIZE_IS_ROWS (generator.py:421);
+	// postgres overrides to false (generators/postgres.py:242): whether a rendered size needs a
+	// trailing ROWS keyword.
+	TablesampleSizeIsRows bool
+	// TablesampleSeedKeyword ports the generator flag TABLESAMPLE_SEED_KEYWORD (generator.py:430);
+	// postgres overrides to "REPEATABLE" (generators/postgres.py:243): the keyword preceding a
+	// TABLESAMPLE clause's seed value.
+	TablesampleSeedKeyword string
+	// TablesampleRequiresParens ports the generator flag TABLESAMPLE_REQUIRES_PARENS
+	// (generator.py:418): whether parentheses are required around the table sample's expression.
+	TablesampleRequiresParens bool
+	// TablesampleWithMethod ports the generator flag TABLESAMPLE_WITH_METHOD (generator.py:427):
+	// whether the TABLESAMPLE clause supports a method name, like BERNOULLI.
+	TablesampleWithMethod bool
+	// TablesampleKeywords ports the generator flag TABLESAMPLE_KEYWORDS (generator.py:424): the
+	// keyword(s) to use when generating a sample clause.
+	TablesampleKeywords string
+	// CopyHasIntoKeyword ports the generator flag COPY_HAS_INTO_KEYWORD (generator.py:526);
+	// postgres overrides to False (generators/postgres.py:251): whether copySQL renders
+	// `COPY INTO <this>` (base) or `COPY <this>` (postgres).
+	CopyHasIntoKeyword bool
+	// CopyParamsAreWrapped ports the generator flag COPY_PARAMS_ARE_WRAPPED (generator.py:
+	// 520): whether copySQL's WITH-clause params are wrapped in parens (`WITH (...)`,
+	// indented when pretty) or emitted bare.
+	CopyParamsAreWrapped bool
+	// CopyParamsAreCsv ports the dialect flag COPY_PARAMS_ARE_CSV (dialects/dialect.py:363):
+	// whether COPY's WITH-clause params are comma-separated (parser: the separator consumed
+	// between options; generator: the separator emitted between rendered options).
+	CopyParamsAreCsv bool
+	// CopyParamsEqRequired ports the generator flag COPY_PARAMS_EQ_REQUIRED (generator.py:
+	// 523): whether copyparameterSQL always renders `option = value` (True) or `option value`
+	// (False) when a param has a scalar value.
+	CopyParamsEqRequired bool
 }
 
 func Base() *Dialect {
@@ -215,6 +257,35 @@ func Base() *Dialect {
 		// generator.py:667 PARAMETER_TOKEN = "@" (base); postgres overrides to "$"
 		// (generators/postgres.py:240).
 		ParameterToken: "@",
+		// generator.py:314 LOCKING_READS_SUPPORTED = False (base).
+		LockingReadsSupported: false,
+		// dialects/dialect.py:342 TABLESAMPLE_SIZE_IS_PERCENT = False (base); postgres
+		// overrides to True (dialects/postgres.py:20).
+		TablesampleSizeIsPercent: false,
+		// generator.py:421 TABLESAMPLE_SIZE_IS_ROWS = True (base); postgres overrides to
+		// False (generators/postgres.py:242).
+		TablesampleSizeIsRows: true,
+		// generator.py:430 TABLESAMPLE_SEED_KEYWORD = "SEED" (base); postgres overrides to
+		// "REPEATABLE" (generators/postgres.py:243).
+		TablesampleSeedKeyword: "SEED",
+		// generator.py:418 TABLESAMPLE_REQUIRES_PARENS = True (base); no dialect override
+		// within base/mysql/postgres.
+		TablesampleRequiresParens: true,
+		// generator.py:427 TABLESAMPLE_WITH_METHOD = True (base); no dialect override
+		// within base/mysql/postgres.
+		TablesampleWithMethod: true,
+		// generator.py:424 TABLESAMPLE_KEYWORDS = "TABLESAMPLE" (base); no dialect override
+		// within base/mysql/postgres.
+		TablesampleKeywords: "TABLESAMPLE",
+		// generator.py:526 COPY_HAS_INTO_KEYWORD = True (base); postgres overrides to False
+		// (generators/postgres.py:251).
+		CopyHasIntoKeyword: true,
+		// generator.py:520 COPY_PARAMS_ARE_WRAPPED = True (base).
+		CopyParamsAreWrapped: true,
+		// dialects/dialect.py:363 COPY_PARAMS_ARE_CSV = True (base).
+		CopyParamsAreCsv: true,
+		// generator.py:523 COPY_PARAMS_EQ_REQUIRED = False (base).
+		CopyParamsEqRequired: false,
 	}
 }
 

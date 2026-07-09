@@ -20,6 +20,16 @@ func Postgres() *Dialect {
 	d.SingleStringInterval = true
 	// generators/postgres.py:240 PARAMETER_TOKEN = "$".
 	d.ParameterToken = "$"
+	// generators/postgres.py:235 LOCKING_READS_SUPPORTED = True.
+	d.LockingReadsSupported = true
+	// dialects/postgres.py:20 TABLESAMPLE_SIZE_IS_PERCENT = True.
+	d.TablesampleSizeIsPercent = true
+	// generators/postgres.py:242 TABLESAMPLE_SIZE_IS_ROWS = False.
+	d.TablesampleSizeIsRows = false
+	// generators/postgres.py:243 TABLESAMPLE_SEED_KEYWORD = "REPEATABLE".
+	d.TablesampleSeedKeyword = "REPEATABLE"
+	// generators/postgres.py:251 COPY_HAS_INTO_KEYWORD = False.
+	d.CopyHasIntoKeyword = false
 	// TODO(slice 5b): DEFAULT_FUNCTIONS_COLUMN_NAMES (needs KindExplodingGenerateSeries + FUNCTIONS override).
 	// TODO(slice 5b): typing/{mysql,postgres}.py EXPRESSION_METADATA — feeds annotate_types only, off probe's path (ROADMAP 4c).
 

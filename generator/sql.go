@@ -765,7 +765,10 @@ func (g *Generator) joinSQL(e expressions.Expression) string {
 			onSQL = space + "ON " + onSQL
 		}
 	} else if opSQL == "" {
-		if this != nil && this.Kind() == expressions.KindLateral && e.Arg("cross_apply") != nil {
+		// generator.py:2850: CROSS/OUTER APPLY joins carry the `cross_apply` flag on the
+		// Lateral child (the join's `this`, set in parser_pivot.go parseLateral), NOT on the
+		// Join node — so read it from `this`. Without this, APPLY joins emit a spurious ", ".
+		if this != nil && this.Kind() == expressions.KindLateral && this.Arg("cross_apply") != nil {
 			return " " + thisSQL
 		}
 		return ", " + thisSQL
@@ -791,8 +794,44 @@ func (g *Generator) sortSQL(e expressions.Expression) string     { return g.opEx
 func (g *Generator) preWhereSQL(e expressions.Expression) string { return "" }
 
 func (g *Generator) lockSQL(e expressions.Expression) string {
-	g.unsupported("Locking reads using 'FOR UPDATE/SHARE' are not supported")
-	return ""
+	if !g.dialect.LockingReadsSupported {
+		g.unsupported("Locking reads using 'FOR UPDATE/SHARE' are not supported")
+		return ""
+	}
+
+	update := boolValue(e.Arg("update"))
+	key := boolValue(e.Arg("key"))
+	var lockType string
+	if update {
+		if key {
+			lockType = "FOR NO KEY UPDATE"
+		} else {
+			lockType = "FOR UPDATE"
+		}
+	} else {
+		if key {
+			lockType = "FOR KEY SHARE"
+		} else {
+			lockType = "FOR SHARE"
+		}
+	}
+	exprs := g.expressions(exprsOptions{expression: e, flat: true})
+	if exprs != "" {
+		exprs = " OF " + exprs
+	}
+
+	wait := ""
+	if w := e.Arg("wait"); w != nil {
+		if we := asExpression(w); we != nil && we.Kind() == expressions.KindLiteral {
+			wait = " WAIT " + g.gen(we)
+		} else if boolValue(w) {
+			wait = " NOWAIT"
+		} else {
+			wait = " SKIP LOCKED"
+		}
+	}
+
+	return lockType + exprs + wait
 }
 
 func (g *Generator) setOperationSQL(e expressions.Expression) string {

@@ -220,24 +220,32 @@ func writeGaps(fails map[gapKey]string) error {
 }
 
 // Pass counts observed from a full local run over Scope A (identity.sql) plus
-// Scope B (dialect_identity.jsonl): base 880/955, mysql 336/424, postgres
-// 385/468 (after the TYPE/CAST/`::`/AT TIME ZONE parity slice: faithful ports of
-// upstream _parse_type/_parse_types/_parse_at_time_zone/_parse_atom close `1::int`-style
-// literal casts, bare `ARRAY<...>`/`STRUCT<...>` type expressions, `x AT TIME ZONE zone`
-// (chainable, any dialect), postgres PSEUDO_TYPE/OBJECT_IDENTIFIER round-trips
-// (`x::regclass`/`x::cstring`/...), postgres user-defined-type CAST targets
-// (`CAST(5 AS "MySchema"."MyType")`), the mysql SET(...) enum type as a CAST target and the
-// `CHAR CHARACTER SET <cs>` charset suffix; mysql's attimezone_sql override drops the zone and
-// flags the query unsupported, matching upstream). LENGTH/CHAR_LENGTH canonicalization is
-// deliberately deferred (ROADMAP 5b per-dialect FUNCTIONS; see expressions/functions.go),
-// so postgres CHAR_LENGTH/CHARACTER_LENGTH stay in parity_gaps.txt. These are monotonic
-// pass floors — raise them as coverage improves, never lower them to mask a
-// regression. A drop below any floor fails the build even if the regressing
+// Scope B (dialect_identity.jsonl): base 905/955, mysql 340/424, postgres
+// 393/468 (after the FROM/TABLE-modifier/LOCK/STATEMENT parity slice, layered on the
+// earlier TYPE/CAST/`::`/AT TIME ZONE slice). This slice ports five self-contained
+// features 1:1 from upstream: TABLESAMPLE (`TABLESAMPLE (BUCKET .. OUT OF ..)`,
+// `(N ROWS)`, `(N PERCENT)`, postgres `SYSTEM (N) REPEATABLE (N)`); LATERAL VIEW attach
+// after the joins loop (`FROM t LATERAL VIEW EXPLODE(x) v AS y`); row-locking reads
+// FOR UPDATE / FOR SHARE / FOR KEY SHARE / FOR NO KEY UPDATE (with OF/NOWAIT/SKIP LOCKED/
+// WAIT, gated on the new LockingReadsSupported dialect flag; mysql `LOCK IN SHARE MODE`
+// canonicalizes to `FOR SHARE`); CACHE/UNCACHE TABLE (`CACHE [LAZY] TABLE x [OPTIONS(..)]
+// [AS <query>]`, `UNCACHE TABLE [IF EXISTS] x`); postgres COPY (`COPY tbl (..) FROM/TO
+// 'file' WITH (..)`, degrading to a raw Command for shapes upstream doesn't model); and
+// the STRAIGHT_JOIN-as-alias guard so `a STRAIGHT_JOIN b` parses as a join in any dialect.
+// The prior TYPE/CAST slice remains covered: `1::int`-style literal casts, bare
+// `ARRAY<...>`/`STRUCT<...>` type expressions, `x AT TIME ZONE zone`, postgres
+// PSEUDO_TYPE/OBJECT_IDENTIFIER round-trips, postgres UDT CAST targets, the mysql SET(...)
+// enum CAST target and `CHAR CHARACTER SET <cs>` suffix. LENGTH/CHAR_LENGTH canonicalization
+// is deliberately deferred (ROADMAP 5b per-dialect FUNCTIONS; see expressions/functions.go),
+// so postgres CHAR_LENGTH/CHARACTER_LENGTH stay in parity_gaps.txt; the Spark CACHE
+// `OPTIONS(N'..' = ..)` National-string key variant likewise stays a gap (unported node).
+// These are monotonic pass floors — raise them as coverage improves, never lower them to
+// mask a regression. A drop below any floor fails the build even if the regressing
 // case is also (illegitimately) added to parity_gaps.txt.
 const (
-	minPassBase     = 880
-	minPassMySQL    = 336
-	minPassPostgres = 385
+	minPassBase     = 905
+	minPassMySQL    = 340
+	minPassPostgres = 393
 )
 
 // Minimum record counts per corpus, from the committed fixtures (identity.sql:

@@ -595,6 +595,16 @@ func (p *Parser) parseQueryModifiers(this exp.Expression) exp.Expression {
 			}
 			this.Append("joins", join)
 		}
+		// Bare LATERAL / LATERAL VIEW (or CROSS/OUTER APPLY) after the joins loop
+		// (parser.py:4180-4185). parseLateral peeks and returns nil without consuming
+		// unless it actually sees one of those tokens, so this is a no-op otherwise.
+		for {
+			lateral := p.parseLateral()
+			if lateral == nil {
+				break
+			}
+			this.Append("laterals", lateral)
+		}
 		for queryModifierTokens[p.curr.TokenType] {
 			parse := queryModifierParsers[p.curr.TokenType]
 			modTok := p.curr
@@ -664,6 +674,15 @@ func (p *Parser) parseTable(schema bool, joins bool, aliasTokens map[tokens.Toke
 					subquery.Set("pivots", pivots)
 				}
 			}
+			// A TABLESAMPLE can trail a pivoted subquery. parseSubquery (parser.go:1944)
+			// only attaches `sample` BEFORE pivots, so when a PIVOT sits between the
+			// subquery and the sample it lands here instead — mirroring upstream
+			// _parse_subquery's pivots-then-sample order (parser.py:4141-4143).
+			if subquery.Arg("sample") == nil {
+				if s := p.parseTableSample(false); s != nil {
+					subquery.Set("sample", s)
+				}
+			}
 			if joins {
 				for {
 					join := p.parseJoin(false, false, aliasTokens)
@@ -700,6 +719,14 @@ func (p *Parser) parseTable(schema bool, joins bool, aliasTokens map[tokens.Toke
 	if this.Arg("pivots") == nil {
 		if pivots := p.parsePivots(); pivots != nil {
 			this.Set("pivots", pivots)
+		}
+	}
+	// TABLESAMPLE modifier (parser.py:4925-4926): most dialects attach `sample` here,
+	// before the JOINs; ALIAS_POST_TABLESAMPLE dialects (none of base/mysql/postgres) would
+	// attach it earlier instead, alongside the alias.
+	if !p.dialect.AliasPostTablesample {
+		if s := p.parseTableSample(false); s != nil {
+			this.Set("sample", s)
 		}
 	}
 	if joins {
@@ -775,7 +802,12 @@ func (p *Parser) parseTableAlias(aliasTokensArg map[tokens.TokenType]bool) exp.E
 	if p.canParseLimitOrOffset() {
 		return nil
 	}
-	if p.curr.TokenType == tokens.PIVOT || p.curr.TokenType == tokens.UNPIVOT {
+	// STRAIGHT_JOIN must never be consumed as a table alias, in any dialect: upstream
+	// base/mysql exclude it from TABLE_ALIAS_TOKENS (parsers/base.py:16-17) even though it
+	// is otherwise a member of ID_VAR_TOKENS (tableAliasTokens here). The Go port compensates
+	// in this guard because it dropped _parse_table's fast-path terminator check
+	// (ROADMAP.md:142-144).
+	if p.curr.TokenType == tokens.PIVOT || p.curr.TokenType == tokens.UNPIVOT || p.curr.TokenType == tokens.STRAIGHT_JOIN {
 		return nil
 	}
 	anyToken := p.match(tokens.ALIAS)
@@ -1925,6 +1957,12 @@ func (p *Parser) parseSubquery(this exp.Expression, parseAlias bool) exp.Express
 	args := exp.Args{"this": this}
 	if parseAlias {
 		args["alias"] = p.parseTableAlias(nil)
+	}
+	// _parse_subquery (parser.py:4132-4146) attaches a trailing TABLESAMPLE to the
+	// Subquery itself, e.g. `(SELECT ...) [AS x] TABLESAMPLE (100 ROWS)`; subquerySQL
+	// already renders this "sample" arg (generator/sql.go:934, afterLimitModifiers).
+	if sample := p.parseTableSample(false); sample != nil {
+		args["sample"] = sample
 	}
 	return p.expression(exp.Subquery(args), nil, nil)
 }

@@ -165,9 +165,6 @@ func deferredQualifyColumnsFixture(pair sqlFixturePair) string {
 	if strings.Contains(upperSQL, "STRUCT(") {
 		return "STRUCT/PropertyEQ is slice 4c"
 	}
-	if strings.Contains(upperSQL, "TABLESAMPLE") {
-		return "TABLESAMPLE parser support is deferred"
-	}
 	if strings.Contains(upperSQL, "READ_CSV(") || strings.Contains(upperSQL, "READ_PARQUET(") || strings.Contains(upperSQL, "ROWS FROM") {
 		return "function table source is slice 4c"
 	}

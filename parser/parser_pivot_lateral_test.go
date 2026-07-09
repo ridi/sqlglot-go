@@ -39,9 +39,10 @@ func TestParseApplyJoin(t *testing.T) {
 	cases := []struct {
 		sql        string
 		crossApply bool
+		want       string // canonical round-trip (sqlglot 30.12.0 default dialect)
 	}{
-		{"SELECT * FROM t CROSS APPLY foo(x)", true},
-		{"SELECT * FROM t OUTER APPLY (SELECT 1)", false},
+		{"SELECT * FROM t CROSS APPLY foo(x)", true, "SELECT * FROM t INNER JOIN LATERAL FOO(x)"},
+		{"SELECT * FROM t OUTER APPLY (SELECT 1)", false, "SELECT * FROM t LEFT JOIN LATERAL (SELECT 1)"},
 	}
 	for _, tc := range cases {
 		root := parseOne(t, tc.sql)
@@ -55,6 +56,15 @@ func TestParseApplyJoin(t *testing.T) {
 		}
 		if lateral.Arg("cross_apply") != tc.crossApply {
 			t.Fatalf("%s: cross_apply = %v, want %v:\n%s", tc.sql, lateral.Arg("cross_apply"), tc.crossApply, root.ToS())
+		}
+		// Regression for the generator reading `cross_apply` off the Lateral (join.this),
+		// not the Join: the buggy path emitted a spurious ", " before the INNER/LEFT JOIN.
+		got, err := generateSQL(t, root, "")
+		if err != nil {
+			t.Fatalf("%s: Generate: %v", tc.sql, err)
+		}
+		if got != tc.want {
+			t.Fatalf("%s: round-trip = %q, want %q", tc.sql, got, tc.want)
 		}
 	}
 }

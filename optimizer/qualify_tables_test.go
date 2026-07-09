@@ -107,8 +107,6 @@ func deferredQualifyTablesFixture(pair sqlFixturePair) string {
 		return "parser does not yet accept function table sources with ordinality"
 	case "alter table":
 		return "ALTER TABLE parser support is deferred"
-	case "tablesample":
-		return "TABLESAMPLE parser support is deferred"
 	}
 	if strings.HasPrefix(pair.SQL, "COPY INTO ") {
 		return "COPY INTO parser support is deferred"

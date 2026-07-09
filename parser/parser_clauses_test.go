@@ -126,6 +126,9 @@ func TestLocks(t *testing.T) {
 		{"SELECT * FROM t FOR SHARE", false, nil, nil, 0},
 		{"SELECT * FROM t LOCK IN SHARE MODE", false, nil, nil, 0},
 		{"SELECT * FROM t FOR NO KEY UPDATE OF a NOWAIT", true, true, true, 1},
+		{"SELECT * FROM t FOR SHARE OF t1, t2 SKIP LOCKED", false, nil, false, 2},
+		{"SELECT * FROM t FOR KEY SHARE", false, true, nil, 0},
+		{"SELECT * FROM t FOR NO KEY UPDATE", true, true, nil, 0},
 	}
 	for _, tc := range cases {
 		expression := parseOne(t, tc.sql)
@@ -140,6 +143,27 @@ func TestLocks(t *testing.T) {
 		if got := len(expressionsForArg(lock, "expressions")); got != tc.ofLen {
 			t.Fatalf("%s: OF expressions = %d, want %d:\n%s", tc.sql, got, tc.ofLen, lock.ToS())
 		}
+	}
+
+	// Multiple lock clauses in sequence produce multiple Lock nodes in "locks".
+	multi := "SELECT * FROM t FOR SHARE OF t1 NOWAIT FOR UPDATE OF t2, t3 SKIP LOCKED"
+	expression := parseOne(t, multi)
+	locks := expressionsForArg(expression, "locks")
+	if len(locks) != 2 || locks[0].Kind() != exp.KindLock || locks[1].Kind() != exp.KindLock {
+		t.Fatalf("%s: locks = %#v, want two Lock nodes:\n%s", multi, locks, expression.ToS())
+	}
+	first, second := locks[0], locks[1]
+	if first.Arg("update") != false || first.Arg("key") != nil || first.Arg("wait") != true {
+		t.Fatalf("%s: first lock args update/key/wait = %v/%v/%v, want false/nil/true:\n%s", multi, first.Arg("update"), first.Arg("key"), first.Arg("wait"), first.ToS())
+	}
+	if got := len(expressionsForArg(first, "expressions")); got != 1 {
+		t.Fatalf("%s: first lock OF expressions = %d, want 1:\n%s", multi, got, first.ToS())
+	}
+	if second.Arg("update") != true || second.Arg("key") != nil || second.Arg("wait") != false {
+		t.Fatalf("%s: second lock args update/key/wait = %v/%v/%v, want true/nil/false:\n%s", multi, second.Arg("update"), second.Arg("key"), second.Arg("wait"), second.ToS())
+	}
+	if got := len(expressionsForArg(second, "expressions")); got != 2 {
+		t.Fatalf("%s: second lock OF expressions = %d, want 2:\n%s", multi, got, second.ToS())
 	}
 }
 

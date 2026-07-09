@@ -7,6 +7,7 @@
 {"dialect":"","category":"parse: Expected ]","sql":"x[1:]"}
 {"dialect":"","category":"parse: Expected ]","sql":"x[:2]"}
 {"dialect":"","category":"parse: Expected ]","sql":"x[:]"}
+{"dialect":"","category":"parse: Expecting )","sql":"CACHE LAZY TABLE x OPTIONS(N'storageLevel' = 'value')"}
 {"dialect":"","category":"parse: Expecting )","sql":"JSON_OBJECT('id': '5', 'fld1': 'bla', 'fld2': 'bar')"}
 {"dialect":"","category":"parse: Expecting )","sql":"JSON_OBJECT('key1': 1, 'key2': TRUE)"}
 {"dialect":"","category":"parse: Expecting )","sql":"JSON_OBJECT('x': 1 RETURNING VARBINARY FORMAT JSON ENCODING UTF8)"}
@@ -14,16 +15,6 @@
 {"dialect":"","category":"parse: Expecting )","sql":"JSON_OBJECT('x': NULL, 'y': 1 ABSENT ON NULL WITH UNIQUE KEYS)"}
 {"dialect":"","category":"parse: Expecting )","sql":"JSON_OBJECT('x': NULL, 'y': 1 NULL ON NULL)"}
 {"dialect":"","category":"parse: Expecting )","sql":"JSON_OBJECT('x': NULL, 'y': 1 WITH UNIQUE KEYS)"}
-{"dialect":"","category":"parse: Expecting )","sql":"SELECT * FROM (x CROSS JOIN foo LATERAL VIEW EXPLODE(y))"}
-{"dialect":"","category":"parse: Invalid expression / Unexpected token","sql":"CACHE LAZY TABLE x"}
-{"dialect":"","category":"parse: Invalid expression / Unexpected token","sql":"CACHE LAZY TABLE x AS WITH a AS (SELECT 1) SELECT a.* FROM a"}
-{"dialect":"","category":"parse: Invalid expression / Unexpected token","sql":"CACHE LAZY TABLE x OPTIONS('storageLevel' = 'value')"}
-{"dialect":"","category":"parse: Invalid expression / Unexpected token","sql":"CACHE LAZY TABLE x OPTIONS('storageLevel' = 'value') AS SELECT 1"}
-{"dialect":"","category":"parse: Invalid expression / Unexpected token","sql":"CACHE LAZY TABLE x OPTIONS('storageLevel' = 'value') AS WITH a AS (SELECT 1) SELECT a.* FROM a"}
-{"dialect":"","category":"parse: Invalid expression / Unexpected token","sql":"CACHE LAZY TABLE x OPTIONS(N'storageLevel' = 'value')"}
-{"dialect":"","category":"parse: Invalid expression / Unexpected token","sql":"CACHE TABLE x"}
-{"dialect":"","category":"parse: Invalid expression / Unexpected token","sql":"CACHE TABLE x AS (SELECT 1 AS y)"}
-{"dialect":"","category":"parse: Invalid expression / Unexpected token","sql":"CACHE TABLE x AS WITH a AS (SELECT 1) SELECT a.* FROM a"}
 {"dialect":"","category":"parse: Invalid expression / Unexpected token","sql":"INSERT INTO a.b PARTITION(DAY = '2024-04-14') (col1, col2) SELECT x FROM y"}
 {"dialect":"","category":"parse: Invalid expression / Unexpected token","sql":"INSERT OVERWRITE DIRECTORY 'x' SELECT 1"}
 {"dialect":"","category":"parse: Invalid expression / Unexpected token","sql":"INSERT OVERWRITE LOCAL DIRECTORY 'x' ROW FORMAT DELIMITED FIELDS TERMINATED BY '1' COLLECTION ITEMS TERMINATED BY '2' MAP KEYS TERMINATED BY '3' LINES TERMINATED BY '4' NULL DEFINED AS '5' SELECT 1"}
@@ -36,30 +27,14 @@
 {"dialect":"","category":"parse: Invalid expression / Unexpected token","sql":"SELECT 'Ac' ILIKE 'a%c' ESCAPE NULL"}
 {"dialect":"","category":"parse: Invalid expression / Unexpected token","sql":"SELECT (LEAD(foo1, 1, 0)) OVER (PARTITION BY foo2 ORDER BY foo3) FROM t"}
 {"dialect":"","category":"parse: Invalid expression / Unexpected token","sql":"SELECT * FROM a JOIN b JOIN c USING (id) USING (id)"}
-{"dialect":"","category":"parse: Invalid expression / Unexpected token","sql":"SELECT * FROM a STRAIGHT_JOIN b"}
 {"dialect":"","category":"parse: Invalid expression / Unexpected token","sql":"SELECT /*+ REBALANCE */ * FROM foo"}
 {"dialect":"","category":"parse: Invalid expression / Unexpected token","sql":"SELECT /*+ SOME_HINT(foo) */ 1"}
 {"dialect":"","category":"parse: Invalid expression / Unexpected token","sql":"SELECT 1 FROM a JOIN b JOIN c ON b.id = c.id ON a.id = b.id"}
 {"dialect":"","category":"parse: Invalid expression / Unexpected token","sql":"SELECT :hello, ? FROM x LIMIT :my_limit"}
 {"dialect":"","category":"parse: Invalid expression / Unexpected token","sql":"SELECT NUMRANGE(1.1, 2.2) -|- NUMRANGE(2.2, 3.3)"}
-{"dialect":"","category":"parse: Invalid expression / Unexpected token","sql":"SELECT a FROM test AS x TABLESAMPLE (BUCKET 1 OUT OF 5)"}
-{"dialect":"","category":"parse: Invalid expression / Unexpected token","sql":"SELECT a FROM test TABLESAMPLE (0.1 PERCENT)"}
-{"dialect":"","category":"parse: Invalid expression / Unexpected token","sql":"SELECT a FROM test TABLESAMPLE (100 ROWS)"}
-{"dialect":"","category":"parse: Invalid expression / Unexpected token","sql":"SELECT a FROM test TABLESAMPLE (BUCKET 1 OUT OF 5 ON RAND())"}
-{"dialect":"","category":"parse: Invalid expression / Unexpected token","sql":"SELECT a FROM test TABLESAMPLE (BUCKET 1 OUT OF 5 ON x)"}
-{"dialect":"","category":"parse: Invalid expression / Unexpected token","sql":"SELECT a FROM test TABLESAMPLE (BUCKET 1 OUT OF 5)"}
 {"dialect":"","category":"parse: Invalid expression / Unexpected token","sql":"SELECT a FROM x WHERE a COLLATE 'utf8_general_ci' = 'b'"}
-{"dialect":"","category":"parse: Invalid expression / Unexpected token","sql":"SELECT student, score FROM tests LATERAL VIEW EXPLODE(scores)"}
-{"dialect":"","category":"parse: Invalid expression / Unexpected token","sql":"SELECT student, score FROM tests LATERAL VIEW EXPLODE(scores) AS score"}
-{"dialect":"","category":"parse: Invalid expression / Unexpected token","sql":"SELECT student, score FROM tests LATERAL VIEW EXPLODE(scores) t AS score"}
-{"dialect":"","category":"parse: Invalid expression / Unexpected token","sql":"SELECT student, score FROM tests LATERAL VIEW EXPLODE(scores) t AS score, name"}
-{"dialect":"","category":"parse: Invalid expression / Unexpected token","sql":"SELECT student, score FROM tests LATERAL VIEW OUTER EXPLODE(scores) t AS score, name"}
-{"dialect":"","category":"parse: Invalid expression / Unexpected token","sql":"SELECT tf.* FROM (SELECT 0) AS t LATERAL VIEW STACK(1, 2) tf"}
-{"dialect":"","category":"parse: Invalid expression / Unexpected token","sql":"SELECT tf.* FROM (SELECT 0) AS t LATERAL VIEW STACK(1, 2) tf AS col0, col1, col2"}
 {"dialect":"","category":"parse: Invalid expression / Unexpected token","sql":"SELECT values"}
 {"dialect":"","category":"parse: Invalid expression / Unexpected token","sql":"SELECT values AS values FROM t WHERE values + 1 > 3"}
-{"dialect":"","category":"parse: Invalid expression / Unexpected token","sql":"UNCACHE TABLE IF EXISTS x"}
-{"dialect":"","category":"parse: Invalid expression / Unexpected token","sql":"UNCACHE TABLE x"}
 {"dialect":"","category":"parse: Invalid expression / Unexpected token","sql":"a OVERLAPS b"}
 {"dialect":"","category":"parse: Invalid expression / Unexpected token","sql":"x GLOB '??-*'"}
 {"dialect":"","category":"parse: Invalid expression / Unexpected token","sql":"x GLOB y"}
@@ -97,8 +72,6 @@
 {"dialect":"mysql","category":"gen: mismatch","sql":"DATE_ADD(base_date, INTERVAL day_interval YEAR_MONTH)"}
 {"dialect":"mysql","category":"gen: mismatch","sql":"DATE_ADD(x, INTERVAL '1' YEAR)"}
 {"dialect":"mysql","category":"gen: mismatch","sql":"SELECT * FROM t1 PARTITION(p0)"}
-{"dialect":"mysql","category":"gen: mismatch","sql":"SELECT * FROM t1, t2 FOR SHARE OF t1, t2 SKIP LOCKED"}
-{"dialect":"mysql","category":"gen: mismatch","sql":"SELECT * FROM t1, t2, t3 FOR SHARE OF t1 NOWAIT FOR UPDATE OF t2, t3 SKIP LOCKED"}
 {"dialect":"mysql","category":"gen: mismatch","sql":"SELECT 1 AS row"}
 {"dialect":"mysql","category":"gen: mismatch","sql":"SELECT CURTIME()"}
 {"dialect":"mysql","category":"gen: mismatch","sql":"SELECT DAY_OF_MONTH('2023-01-01')"}
@@ -109,7 +82,6 @@
 {"dialect":"mysql","category":"gen: mismatch","sql":"SELECT TIME_STR_TO_TIME('2023-01-01 13:14:15-08:00', 'America/Los_Angeles')"}
 {"dialect":"mysql","category":"gen: mismatch","sql":"SELECT UCASE('foo')"}
 {"dialect":"mysql","category":"gen: mismatch","sql":"SELECT WEEK_OF_YEAR('2023-01-01')"}
-{"dialect":"mysql","category":"gen: mismatch","sql":"SELECT name FROM temp WHERE name = ? FOR UPDATE"}
 {"dialect":"mysql","category":"gen: mismatch","sql":"TIME_STR_TO_UNIX(x)"}
 {"dialect":"mysql","category":"gen: mismatch","sql":"TRUNC(3.14159, 2)"}
 {"dialect":"mysql","category":"gen: mismatch","sql":"x ->> '$.name'"}
@@ -154,7 +126,6 @@
 {"dialect":"mysql","category":"parse: Invalid expression / Unexpected token","sql":"SELECT HIGH_PRIORITY STRAIGHT_JOIN SQL_CALC_FOUND_ROWS * FROM t"}
 {"dialect":"mysql","category":"parse: Invalid expression / Unexpected token","sql":"SELECT JSON_ARRAY(4, 5) MEMBER OF('[[3,4],[4,5]]')"}
 {"dialect":"mysql","category":"parse: Invalid expression / Unexpected token","sql":"SELECT a || b"}
-{"dialect":"mysql","category":"parse: Invalid expression / Unexpected token","sql":"SELECT e.* FROM e STRAIGHT_JOIN p ON e.x = p.y"}
 {"dialect":"mysql","category":"parse: Required keyword","sql":"CONVERT('a' USING binary)"}
 {"dialect":"mysql","category":"parse: Required keyword","sql":"DATABASE()"}
 {"dialect":"mysql","category":"parse: Required keyword","sql":"MOD(x, y)"}
@@ -180,10 +151,6 @@
 {"dialect":"postgres","category":"gen: mismatch","sql":"CREATE FUNCTION x(INT) RETURNS INT SET search_path TO 'public'"}
 {"dialect":"postgres","category":"gen: mismatch","sql":"CREATE TRIGGER proc_trigger BEFORE INSERT ON users FOR EACH ROW EXECUTE PROCEDURE LOG_CHANGES()"}
 {"dialect":"postgres","category":"gen: mismatch","sql":"MERGE INTO x USING (SELECT id) AS y ON a = b WHEN MATCHED THEN UPDATE SET x.a = y.b WHEN NOT MATCHED THEN INSERT (a, b) VALUES (y.a, y.b)"}
-{"dialect":"postgres","category":"gen: mismatch","sql":"SELECT 1 FROM foo AS x FOR KEY SHARE OF x"}
-{"dialect":"postgres","category":"gen: mismatch","sql":"SELECT 1 FROM foo AS x FOR NO KEY UPDATE OF x"}
-{"dialect":"postgres","category":"gen: mismatch","sql":"SELECT 1 FROM foo AS x FOR SHARE OF x"}
-{"dialect":"postgres","category":"gen: mismatch","sql":"SELECT 1 FROM foo AS x FOR UPDATE OF x"}
 {"dialect":"postgres","category":"gen: mismatch","sql":"SELECT ARRAY_LENGTH(ARRAY[1, 2, 3], 1)"}
 {"dialect":"postgres","category":"gen: mismatch","sql":"SELECT date_add(current_date, interval '7' day)"}
 {"dialect":"postgres","category":"gen: mismatch","sql":"select count() OVER(partition by a order by a range offset preceding exclude current row)"}
@@ -204,15 +171,12 @@
 {"dialect":"postgres","category":"parse: Expecting )","sql":"SELECT p1.id, p2.id, v1, v2 FROM polygons AS p1, polygons AS p2, LATERAL VERTICES(p1.poly) v1, LATERAL VERTICES(p2.poly) v2 WHERE (v1 <-> v2) < 10 AND p1.id <> p2.id"}
 {"dialect":"postgres","category":"parse: Invalid expression / Unexpected token","sql":"'x' 'y' 'z'"}
 {"dialect":"postgres","category":"parse: Invalid expression / Unexpected token","sql":"ARRAY[1, 2, 3] && ARRAY[1, 2]"}
-{"dialect":"postgres","category":"parse: Invalid expression / Unexpected token","sql":"COPY tbl (col1, col2) FROM 'file' WITH (FORMAT format, HEADER MATCH, FREEZE TRUE)"}
-{"dialect":"postgres","category":"parse: Invalid expression / Unexpected token","sql":"COPY tbl (col1, col2) TO 'file' WITH (FORMAT format, HEADER MATCH, FREEZE TRUE)"}
 {"dialect":"postgres","category":"parse: Invalid expression / Unexpected token","sql":"SELECT '[\"a\", \"b\"]'::jsonb ?& array['a', 'b']"}
 {"dialect":"postgres","category":"parse: Invalid expression / Unexpected token","sql":"SELECT '[\"a\", {\"b\":1}]'::jsonb #- '{1,b}'"}
 {"dialect":"postgres","category":"parse: Invalid expression / Unexpected token","sql":"SELECT '{\"a\":1, \"b\":2, \"c\":3}'::jsonb ?| array['b', 'c']"}
 {"dialect":"postgres","category":"parse: Invalid expression / Unexpected token","sql":"SELECT * FROM ROWS FROM (FUNC1(col1) AS alias1(\"col1\" TEXT), FUNC2(col2) AS alias2(\"col2\" INT)) WITH ORDINALITY"}
 {"dialect":"postgres","category":"parse: Invalid expression / Unexpected token","sql":"SELECT * FROM ROWS FROM (FUNC1(col1, col2))"}
 {"dialect":"postgres","category":"parse: Invalid expression / Unexpected token","sql":"SELECT * FROM events WHERE doc @? '$.a[*] ? (@ > 2)'"}
-{"dialect":"postgres","category":"parse: Invalid expression / Unexpected token","sql":"SELECT * FROM t TABLESAMPLE SYSTEM (50) REPEATABLE (55)"}
 {"dialect":"postgres","category":"parse: Invalid expression / Unexpected token","sql":"SELECT * FROM table1, ROWS FROM (FUNC1(col1) AS alias1(\"col1\" TEXT)) WITH ORDINALITY AS alias3(\"col3\" INT, \"col4\" TEXT)"}
 {"dialect":"postgres","category":"parse: Invalid expression / Unexpected token","sql":"SELECT ARRAY[1, 2, 3] <@ ARRAY[1, 2]"}
 {"dialect":"postgres","category":"parse: Invalid expression / Unexpected token","sql":"SELECT NUMRANGE(1.1, 2.2) -|- NUMRANGE(2.2, 3.3)"}
@@ -241,6 +205,5 @@
 {"dialect":"postgres","category":"parse: Invalid expression / Unexpected token","sql":"x ~* 'y'"}
 {"dialect":"postgres","category":"parse: Invalid expression / Unexpected token","sql":"|/ x"}
 {"dialect":"postgres","category":"parse: Invalid expression / Unexpected token","sql":"||/ x"}
-{"dialect":"postgres","category":"parse: Required keyword","sql":"COPY (SELECT * FROM t) TO 'file' WITH (FORMAT format, HEADER MATCH, FREEZE TRUE)"}
 {"dialect":"postgres","category":"parse: Required keyword","sql":"SELECT * FROM foo WHERE id = %(id_param)s"}
 {"dialect":"postgres","category":"parse: Required keyword","sql":"SELECT * FROM foo WHERE id = %s"}

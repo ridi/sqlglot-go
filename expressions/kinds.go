@@ -276,6 +276,11 @@ const (
 	// BOOLOR_AGG all parse to it; postgres/mysql rename it on generation (see
 	// generator/aggregate.go logicalOrSQL).
 	KindLogicalOr
+	// KindTableSample ports exp.TableSample (query.py:1723-1733): the `TABLESAMPLE (...)`
+	// modifier attached to a table source's "sample" arg (already-wired KindTable arg key,
+	// tableSQL/subquerySQL). A plain Expression (no Func/Condition mixin), so it gets no
+	// traitsOf row below.
+	KindTableSample
 	// KindAtTimeZone/KindPseudoType/KindObjectIdentifier close the TYPE/CAST/`::`/
 	// AT TIME ZONE round-trip parity gap: exp.AtTimeZone (core.py:2267, a plain
 	// Expression - `x AT TIME ZONE zone`, parsed by _parse_at_time_zone), and
@@ -293,6 +298,20 @@ const (
 	// AS STRUCT<a INT, b TEXT>). Renders through the generic TraitFunc fallback
 	// (STRUCT(...)), matching upstream struct_sql for non-named-field constructors.
 	KindStruct
+	// KindCache/KindUncache port exp.Cache/exp.Uncache (core.py:1583-1594): Spark's
+	// `CACHE [LAZY] TABLE x [OPTIONS(k = v)] [AS <query>]` / `UNCACHE TABLE [IF EXISTS] x`.
+	// Both are plain Expression subclasses (no Func/Condition/... mixin), so neither
+	// gets a traitsOf row below.
+	KindCache
+	KindUncache
+	// KindCopy/KindCopyParameter/KindCredentials port exp.Copy/exp.CopyParameter/
+	// exp.Credentials (dml.py:166-174, 162-163, 177-184): the `COPY ... FROM/TO ...`
+	// statement (parser.py:9616-9649, generator.py:5393-5419). Copy(Expression, DML) gets
+	// a traitsOf row (TraitDML); CopyParameter and Credentials are plain Expression
+	// subclasses with no mixin, so they get none (mirroring e.g. KindTableAlias).
+	KindCopy
+	KindCopyParameter
+	KindCredentials
 )
 
 type Trait uint32
@@ -630,6 +649,15 @@ var argTypes = map[Kind][]argSpec{
 	KindObjectIdentifier: defaultArgTypes,
 	// Struct (array.py:356): arg_types = {"expressions": False}.
 	KindStruct: {{"expressions", false}},
+	// TableSample (query.py:1724-1733): all nine keys optional.
+	KindTableSample: {{"expressions", false}, {"method", false}, {"bucket_numerator", false}, {"bucket_denominator", false}, {"bucket_field", false}, {"percent", false}, {"rows", false}, {"size", false}, {"seed", false}},
+	// Cache/Uncache (core.py:1583-1594).
+	KindCache:   {{"this", true}, {"lazy", false}, {"options", false}, {"expression", false}},
+	KindUncache: {{"this", true}, {"exists", false}},
+	// Copy/CopyParameter/Credentials (dml.py:166-174, 162-163, 177-184).
+	KindCopy:          {{"this", true}, {"kind", true}, {"files", false}, {"credentials", false}, {"format", false}, {"params", false}},
+	KindCopyParameter: {{"this", true}, {"expression", false}, {"expressions", false}},
+	KindCredentials:   {{"credentials", false}, {"encryption", false}, {"storage", false}, {"iam_role", false}, {"region", false}},
 }
 
 var traitsOf = map[Kind]Trait{
@@ -765,6 +793,10 @@ var traitsOf = map[Kind]Trait{
 	// Struct is `class Struct(Expression, Func)` and Func(Condition) (core.py:1641),
 	// so it carries both mixins - same as KindArray above.
 	KindStruct: TraitCondition | TraitFunc,
+	// Copy is `class Copy(Expression, DML)` (dml.py:166); CopyParameter/Credentials are
+	// plain Expression subclasses with no mixin, so they get no row here (matching e.g.
+	// KindTableAlias above).
+	KindCopy: TraitDML,
 }
 
 var primitive = map[Kind]bool{
@@ -1025,10 +1057,16 @@ var className = map[Kind]string{
 	KindLambda:                              "Lambda",
 	KindReplace:                             "Replace",
 	KindLogicalOr:                           "LogicalOr",
+	KindTableSample:                         "TableSample",
 	KindAtTimeZone:                          "AtTimeZone",
 	KindPseudoType:                          "PseudoType",
 	KindObjectIdentifier:                    "ObjectIdentifier",
 	KindStruct:                              "Struct",
+	KindCache:                               "Cache",
+	KindUncache:                             "Uncache",
+	KindCopy:                                "Copy",
+	KindCopyParameter:                       "CopyParameter",
+	KindCredentials:                         "Credentials",
 }
 
 // varLenArgs is the authoritative is_var_len_args=True set (mirroring the upstream Func
