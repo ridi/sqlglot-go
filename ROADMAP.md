@@ -216,6 +216,12 @@ Cross-cutting deferred from foundation (tracked as TODOs in code):
 - Full schema/type annotation hierarchy beyond the parser's minimal DataType/DType nodes (slice 3).
 - highlight_sql-rich parse errors already ported in foundation; parse_into(into=) deferred.
 
+**All intentional deviations from upstream are consolidated in [DEVIATIONS.md](./DEVIATIONS.md).** The
+headline behavioral one: ASCII-only identifier case-folding (`dialects/dialect.go` NormalizeIdentifier /
+CaseSensitive) — a deliberate divergence from upstream's full-Unicode `str.lower()`/`str.upper()`
+(dialect.py:1042-1050,1055-1064) to match how real engines fold on multibyte encodings (PostgreSQL
+`downcase_identifier`, scansup.c: ASCII-only). See DEVIATIONS.md §1.1.
+
 Known divergences from the r1–r3 adversarial review (differential-tested vs Python 30.12.0;
 non-blocking for the foundation, must be resolved by the noted slice):
 - arg ordering: newNode orders args by argTypes declaration order, not caller insertion

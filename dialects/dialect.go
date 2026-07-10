@@ -3,7 +3,6 @@ package dialects
 import (
 	"fmt"
 	"strings"
-	"unicode"
 
 	exp "github.com/sjincho/sqlglot-go/expressions"
 	"github.com/sjincho/sqlglot-go/tokens"
@@ -563,15 +562,62 @@ func (d *Dialect) NewTokenizer() *tokens.Tokenizer {
 	return tokens.NewTokenizerWithConfig(d.TokenizerConfig)
 }
 
+// asciiLower / asciiUpper case-fold ONLY the ASCII letters A-Z <-> a-z
+// (bytes 0x41-0x5A / 0x61-0x7A), leaving every byte >= 0x80 unchanged. This
+// models how real engines case-fold *unquoted* identifiers: PostgreSQL's
+// downcase_identifier (src/backend/parser/scansup.c) folds ASCII-only on any
+// multibyte (e.g. UTF-8) server_encoding, so `CAFÉ` -> `cafÉ` (C,A,F folded,
+// É left alone), NOT `café`. UTF-8 lead/continuation bytes are always >= 0x80,
+// so the plain byte scan never touches a multibyte sequence.
+//
+// DIVERGENCE FROM UPSTREAM (intentional): sqlglot's Dialect.normalize_identifier
+// folds with Python str.lower()/str.upper() (full-Unicode) — dialects/dialect.py
+// v30.12.0:1042-1050 — which over-folds non-ASCII case (É->é) and so diverges
+// from the database it models. We fold ASCII-only: exact for UTF-8 and a safe
+// under-fold otherwise (sqlglot has no DB connection, can't know the encoding/
+// locale). Matches PostgreSQL downcase_identifier (scansup.c), which folds
+// ASCII-only on multibyte encodings. Full detail + citations: DEVIATIONS.md §1.1.
+func asciiLower(s string) string {
+	var b []byte
+	for i := 0; i < len(s); i++ {
+		if c := s[i]; c >= 'A' && c <= 'Z' {
+			if b == nil {
+				b = []byte(s)
+			}
+			b[i] = c + ('a' - 'A')
+		}
+	}
+	if b == nil {
+		return s
+	}
+	return string(b)
+}
+
+func asciiUpper(s string) string {
+	var b []byte
+	for i := 0; i < len(s); i++ {
+		if c := s[i]; c >= 'a' && c <= 'z' {
+			if b == nil {
+				b = []byte(s)
+			}
+			b[i] = c - ('a' - 'A')
+		}
+	}
+	if b == nil {
+		return s
+	}
+	return string(b)
+}
+
 func (d *Dialect) NormalizeIdentifier(e exp.Expression) exp.Expression {
 	if e != nil && e.Kind() == exp.KindIdentifier && d.NormalizationStrategy != CaseSensitive {
 		quoted, _ := e.Arg("quoted").(bool)
 		if !quoted || d.NormalizationStrategy == CaseInsensitive || d.NormalizationStrategy == CaseInsensitiveUppercase {
 			this, _ := e.Arg("this").(string)
 			if d.NormalizationStrategy == Uppercase || d.NormalizationStrategy == CaseInsensitiveUppercase {
-				e.Set("this", strings.ToUpper(this))
+				e.Set("this", asciiUpper(this))
 			} else {
-				e.Set("this", strings.ToLower(this))
+				e.Set("this", asciiLower(this))
 			}
 		}
 	}
@@ -582,9 +628,17 @@ func (d *Dialect) CaseSensitive(text string) bool {
 	if d.NormalizationStrategy == CaseInsensitive {
 		return false
 	}
-	unsafe := unicode.IsUpper
+	// ASCII-only, to stay consistent with asciiLower/asciiUpper folding: an
+	// identifier is "case sensitive" (would be changed by folding, so must be
+	// quoted to preserve it) only if it contains an ASCII letter of the case the
+	// fold would flip. A non-ASCII letter like `É` is NEVER folded, so an
+	// identifier that differs only by non-ASCII case (e.g. `cafÉ`) is already in
+	// normalized form and must NOT be treated as needing folding/quoting.
+	// (Upstream uses full-Unicode str.isupper/str.islower — dialects/dialect.py
+	// v30.12.0:1055-1064; we diverge to match asciiLower/asciiUpper. See above.)
+	unsafe := func(r rune) bool { return r >= 'A' && r <= 'Z' } // Lowercase strategy
 	if d.NormalizationStrategy == Uppercase {
-		unsafe = unicode.IsLower
+		unsafe = func(r rune) bool { return r >= 'a' && r <= 'z' }
 	}
 	for _, r := range text {
 		if unsafe(r) {

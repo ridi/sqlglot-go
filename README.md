@@ -32,7 +32,9 @@ targeted slice of the optimizer:
   round-trip is a goal and is tested; reading one dialect and writing another is not verified.
 - **Dialects beyond base / MySQL / Postgres** (upstream ships 30+).
 
-See [ROADMAP.md](./ROADMAP.md) for the remaining work, known divergences, and resolved-findings ledger.
+See [ROADMAP.md](./ROADMAP.md) for the remaining work and resolved-findings ledger, and
+[DEVIATIONS.md](./DEVIATIONS.md) for every place the port *intentionally* behaves differently from
+upstream sqlglot (headline: ASCII-only identifier case-folding, to match real engines).
 
 ## What works today
 
