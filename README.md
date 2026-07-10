@@ -1,27 +1,50 @@
 # sqlglot-go
 
-A faithful, near-1:1 **Go port of [tobymao/sqlglot](https://github.com/tobymao/sqlglot) v30.12.0** —
-the pure-Python SQL parser, transpiler, and optimizer.
+A Go port of the **parse → AST → generate** core of
+[tobymao/sqlglot](https://github.com/tobymao/sqlglot) v30.12.0, plus the `qualify` and `scope`
+optimizer passes that column **qualification and lineage** are built on. Ported file-by-file from the
+pinned Python source, as close to 1:1 as Go allows, so upstream tests port across directly. **Zero
+third-party dependencies** (Go stdlib only).
 
-This is not a wrapper or a reimagining: it mirrors sqlglot's architecture (tokenizer → parser → AST →
-generator → optimizer passes) file-by-file, so behavior tracks the Python original and upstream tests
-port across directly. It has **zero third-party dependencies** (Go stdlib only).
+## Scope — what this is (and isn't)
 
-> **Status: in progress.** The tokenizer, AST, generator, schema, and the `qualify`/`scope` optimizer
-> passes work for **base + MySQL + Postgres**, validated against the ported upstream test suite. The
-> parser is being brought to full upstream parity — some tail constructs are not parsed yet (tracked
-> in [ROADMAP.md](./ROADMAP.md)). Dialect coverage beyond base/MySQL/Postgres is future work.
+This is **not** a port of all of sqlglot. It ports the front half of the pipeline in full and a
+targeted slice of the optimizer:
+
+**Ported (faithful, ~1:1):**
+- **Tokenizer, AST/node model, parser, generator** — the full round-trip. Anything upstream sqlglot
+  parses and regenerates for **base + MySQL + Postgres**, this port does identically:
+  **100% round-trip parity — 1847/1847 corpus cases** (base 955/955, MySQL 424/424, Postgres 468/468),
+  checked against the ported upstream test suite. No statement fakes a round-trip via a raw-text
+  fallback where upstream builds a structured node (guarded by a committed fidelity test).
+- **Schema** — `MappingSchema`, `DataType.build`, type-category sets.
+- **`qualify` optimizer pass** — qualify_tables → normalize_identifiers → qualify_columns →
+  quote_identifiers → validate.
+- **`scope` / `traverse_scope` + the full `Scope` API** — sources, columns, unions, CTEs, subqueries:
+  the foundation for **column lineage**.
+
+**Not ported (yet):**
+- The rest of sqlglot's **optimizer**: `simplify` (full), `normalize`, `pushdown_predicates`,
+  `pushdown_projections`, `eliminate_ctes` / `eliminate_joins` / `eliminate_subqueries`,
+  `merge_subqueries`, `unnest_subqueries`, `optimize_joins`, `canonicalize`, and the top-level
+  `optimize()` rule orchestrator. (`annotate_types` and `simplify` are only partially present.)
+- **Cross-dialect transpilation** — the generator can target a dialect, but only **same-dialect**
+  round-trip is a goal and is tested; reading one dialect and writing another is not verified.
+- **Dialects beyond base / MySQL / Postgres** (upstream ships 30+).
+
+See [ROADMAP.md](./ROADMAP.md) for the remaining work, known divergences, and resolved-findings ledger.
 
 ## What works today
 
 | Capability | Package | Notes |
 |---|---|---|
-| Tokenize | `tokens`, `trie` | full base tokenizer |
-| Parse → AST | `parser`, `expressions` | SELECT/set-ops/CTE/subqueries, all query clauses, predicates, functions, DML + DDL roots (INSERT/UPDATE/DELETE/MERGE/CREATE), CAST/DataType, PIVOT/LATERAL/VALUES, INTERVAL, JSON ops. Parser tail in progress — see ROADMAP. |
-| Generate (AST → SQL) | `generator` | base dialect; 732/955 `identity.sql` lines round-trip |
-| Schema | `schema` | `MappingSchema`, `DataType.build`, type category sets |
-| Optimize | `optimizer` | `qualify` (qualify_tables, normalize_identifiers, qualify_columns, quote_identifiers, validate), `traverse_scope` + full `Scope` API |
-| Dialects | `dialects` | MySQL + Postgres (tokenizer, normalization, quoting) |
+| Tokenize | `tokens` | base + MySQL + Postgres tokenizers |
+| Parse → AST | `parser`, `expressions` | full: SELECT/set-ops/CTE/subqueries, all query clauses, predicates, functions, DML + DDL (INSERT/UPDATE/DELETE/MERGE/CREATE + properties), CAST/DataType, PIVOT/LATERAL/VALUES/TABLESAMPLE, INTERVAL, JSON/JSONB ops, window functions |
+| Generate (AST → SQL) | `generator` | **100% round-trip** on the upstream identity corpus for base/MySQL/Postgres (1847/1847) |
+| Schema | `schema` | `MappingSchema`, `DataType.build`, type-category sets |
+| Qualify | `optimizer` | `qualify` (qualify_tables, normalize_identifiers, qualify_columns, quote_identifiers, validate) |
+| Scope / lineage | `optimizer` | `traverse_scope` + full `Scope` API (sources, columns, unions, CTEs) |
+| Dialects | `dialects` | MySQL + Postgres (tokenizer, normalization, quoting, per-dialect functions/flags) |
 
 ## Quick start
 
@@ -72,8 +95,9 @@ gofmt -l . && go vet ./...
 ```
 
 The upstream test suite is ported alongside the code (`*_test.go` + `testdata/*.sql` fixtures reused
-verbatim) and is the correctness oracle. For a live differential check against the pinned Python
-source, `scripts/fetch-reference.sh` fetches sqlglot 30.12.0 into `.reference/`, then e.g.
+verbatim) and is the correctness oracle. A round-trip parity corpus and an AST-fidelity gate keep the
+port honest — both are monotonic (they can only tighten). For a live differential check against the
+pinned Python source, `scripts/fetch-reference.sh` fetches sqlglot 30.12.0 into `.reference/`, then e.g.
 `PYTHONPATH=.reference/sqlglot-v30.12.0 python3 -c "import sqlglot; print(sqlglot.parse_one('…','postgres').sql())"`.
 
 ## Continuing the port

@@ -1,9 +1,12 @@
 # sqlglot-go — agent guide
 
-A faithful, near-1:1 Go port of **[tobymao/sqlglot](https://github.com/tobymao/sqlglot) v30.12.0**
-(a pure-Python SQL parser, generator, and optimizer). The goal is behavioral parity with upstream
-for **base + MySQL + Postgres** — tokenizer, AST, parser, generator, schema, and the optimizer
-passes. This repo is the SQL engine only; it has no application-specific code.
+A Go port of **[tobymao/sqlglot](https://github.com/tobymao/sqlglot) v30.12.0** (a pure-Python SQL
+parser, generator, and optimizer). It ports the **parse → AST → generate** core ~1:1 (tokenizer, AST,
+parser, generator, schema) plus the `qualify` and `scope` optimizer passes that column qualification
+and **lineage** build on. It is **not** a full port of sqlglot: the rest of the optimizer (simplify,
+normalize, pushdown/eliminate/merge/unnest passes, the `optimize()` orchestrator), cross-dialect
+transpilation, and dialects beyond **base + MySQL + Postgres** are out of scope for now. This repo is
+the SQL engine only; it has no application-specific code.
 
 ## Source of truth (READ THIS FIRST, always)
 
@@ -20,16 +23,21 @@ passes. This repo is the SQL engine only; it has no application-specific code.
 
 ## Current status
 
-`go test ./...` is green. Working for base + MySQL + Postgres: the tokenizer, the AST + node model,
-the generator (`Expression → SQL`), `schema.MappingSchema` + `DataType.build`, and the optimizer
-passes `qualify` (qualify_tables → normalize_identifiers → qualify_columns → quote_identifiers →
-validate) and `traverse_scope` + the full `Scope` API.
+`go test ./...` is green. The parse → generate pipeline is at **100% round-trip parity** for base +
+MySQL + Postgres — **1847/1847** identity-corpus cases (base 955/955, MySQL 424/424, Postgres 468/468),
+enforced by a monotonic corpus floor (`corpus_test.go` + `testdata/parity_gaps.txt`, now empty). AST
+fidelity is enforced too: no statement fakes a round-trip via a raw-text `exp.Command` where upstream
+builds a structured node (`fidelity_test.go` + `testdata/fidelity_cases.txt`). Working for base + MySQL
++ Postgres: the tokenizer, the AST + node model, the parser, the generator (`Expression → SQL`),
+`schema.MappingSchema` + `DataType.build`, the `qualify` pass (qualify_tables → normalize_identifiers →
+qualify_columns → quote_identifiers → validate), and `traverse_scope` + the full `Scope` API.
 
-**Remaining work = parser/feature parity with upstream** (see `ROADMAP.md`): the parser tail (table-
-valued function sources like `generate_series(...)` in FROM, `ARRAY[...]` literals, `JSON_TABLE`,
-`SIMILAR TO`, `FROM ONLY`, `CONNECT BY`, the long function registry tail, DDL constraint detail),
-full `annotate_types`, and per-dialect parser/generator overrides. Anything upstream sqlglot parses
-should parse here too; a construct that doesn't parse yet is a gap to close, not a feature.
+**Remaining work** (see `ROADMAP.md`): the rest of sqlglot's optimizer — `simplify` (full),
+`normalize`, `pushdown_predicates`/`pushdown_projections`, `eliminate_*`, `merge_subqueries`,
+`unnest_subqueries`, `optimize_joins`, `canonicalize`, and the top-level `optimize()` orchestrator;
+full `annotate_types`; verified cross-dialect transpilation; and dialects beyond base/MySQL/Postgres.
+The parse/generate round-trip itself is done — a construct upstream parses that this port doesn't is a
+regression, not expected.
 
 ## Central design decision — the AST node model
 
