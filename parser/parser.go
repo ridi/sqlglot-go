@@ -1600,12 +1600,20 @@ func (p *Parser) parseType(parseInterval, fallbackToIdentifier bool) exp.Express
 		this := p.parsePrimary()
 
 		if this != nil && this.Kind() == exp.KindLiteral {
+			// literal is captured from the original Literal before parseColumnOps rewrites
+			// `this`, mirroring upstream `literal = this.name` (parser.py:6180).
+			literal := this.Name()
 			this = p.parseColumnOps(this)
 
 			// TYPE_LITERAL_PARSERS (parser.py:1562-1564) maps only DType.JSON -> ParseJSON in
 			// the base parser; ParseJSON isn't modeled by this port yet (out of this parity
-			// slice's scope). ZONE_AWARE_TIMESTAMP_CONSTRUCTOR (parser.py:6186-6191) is
-			// Presto-only, never set by base/mysql/postgres - also omitted.
+			// slice's scope). ZONE_AWARE_TIMESTAMP_CONSTRUCTOR (parser.py:6186-6191) promotes
+			// `TIMESTAMP '<zoned literal>'` -> TIMESTAMPTZ, gated on the Presto-only dialect
+			// flag; base/mysql/postgres leave it false, so this branch is a no-op for them.
+			if p.dialect.ZoneAwareTimestampConstructor && exp.DataTypeIsType(dataType, false, exp.DTypeTimestamp) && timeZoneRE.MatchString(literal) {
+				dataType = exp.DataType(exp.Args{"this": exp.DTypeTimestampTz})
+			}
+
 			return p.expression(exp.Cast(exp.Args{"this": this, "to": dataType}), nil, nil)
 		}
 
@@ -1625,9 +1633,11 @@ func (p *Parser) parseType(parseInterval, fallbackToIdentifier bool) exp.Express
 }
 
 // primaryParsers ports the base PRIMARY_PARSERS (parser.py:1122-1173: STRING_PARSERS +
-// NUMERIC_PARSERS + NULL/TRUE/FALSE/STAR). UNICODE_STRING/BIT_STRING/BYTE_STRING/HEX_STRING/
-// INTRODUCER/SESSION_PARAMETER entries are omitted: those node kinds aren't modeled by this
-// port yet. NATIONAL_STRING (-> National, slice-strings cluster) is included below.
+// NUMERIC_PARSERS + NULL/TRUE/FALSE/STAR). BIT_STRING/BYTE_STRING/HEX_STRING/INTRODUCER/
+// SESSION_PARAMETER entries are omitted: those node kinds aren't modeled by this port yet.
+// NATIONAL_STRING (-> National, slice-strings cluster) and UNICODE_STRING (-> UnicodeString,
+// e.g. Presto's `U&'...'`) are included below. The UESCAPE clause of UNICODE_STRING
+// (parser.py:1135-1140) is deferred - `escape` stays unset.
 //
 // Declared as an empty map + func init() assignment (rather than a map literal) because a
 // literal here would create a Go initialization-cycle: primaryParsers' STAR entry calls
@@ -1648,6 +1658,9 @@ func init() {
 	}
 	primaryParsers[tokens.NATIONAL_STRING] = func(p *Parser, token tokens.Token) exp.Expression {
 		return p.expression(exp.National(exp.Args{"this": token.Text}), &token, nil)
+	}
+	primaryParsers[tokens.UNICODE_STRING] = func(p *Parser, token tokens.Token) exp.Expression {
+		return p.expression(exp.UnicodeString(exp.Args{"this": token.Text}), &token, nil)
 	}
 	primaryParsers[tokens.NUMBER] = func(p *Parser, token tokens.Token) exp.Expression {
 		return p.expression(exp.LiteralNumber(token.Text), &token, nil)

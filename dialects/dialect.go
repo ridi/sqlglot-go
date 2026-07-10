@@ -218,6 +218,13 @@ type Dialect struct {
 	// (e.g. `SELECT values`, `values.c`). MySQL overrides to False (parsers/mysql.py:303),
 	// since MySQL treats VALUES specially even without a following paren.
 	ValuesFollowedByParen bool
+	// ZoneAwareTimestampConstructor ports the parser flag ZONE_AWARE_TIMESTAMP_CONSTRUCTOR
+	// (parser.py:1831, default False; parsers/presto.py:61 overrides to True). Consumed at
+	// parser.py:6186-6191 when parsing a typed-literal CAST: for a TIMESTAMP-typed literal whose
+	// text carries a time-zone offset (TIME_ZONE_RE), the target type is promoted to TIMESTAMPTZ
+	// (`TIMESTAMP '2020-01-01 00:00:00+00'` -> CAST(... AS TIMESTAMPTZ)). Presto is the first
+	// in-scope override; base/mysql/postgres leave it at the False default.
+	ZoneAwareTimestampConstructor bool
 	// SupportsPartitionSelection ports the parser flag SUPPORTS_PARTITION_SELECTION
 	// (parser.py:1810, default False): whether a table source in FROM may carry a trailing
 	// PARTITION(...) selector, e.g. `SELECT * FROM t1 PARTITION(p0)`. MySQL overrides to True
@@ -274,9 +281,11 @@ func Base() *Dialect {
 		ValidIntervalUnits:       validIntervalUnits(datePartMapping),
 		SupportsUserDefinedTypes: true,
 		SupportsFixedSizeArrays:  false,
-		SupportsLimitAll:         false,
-		// dialect.py:670 SUPPORTS_VALUES_DEFAULT = True (base); Presto/Dremio override to
-		// False (out of scope: only base/mysql/postgres are ported).
+		// dialect.py:664 SUPPORTS_LIMIT_ALL = False (base); postgres (dialects/postgres.py) and
+		// presto (dialects/presto.py:25) both override to True.
+		SupportsLimitAll: false,
+		// dialect.py:670 SUPPORTS_VALUES_DEFAULT = True (base); presto overrides to False
+		// (dialects/presto.py:26).
 		SupportsValuesDefault: true,
 		// generator.py:374 DUPLICATE_KEY_UPDATE_WITH_SET = True (base); MySQL overrides to
 		// False (generators/mysql.py:137).
@@ -372,6 +381,9 @@ func Base() *Dialect {
 		// parser.py:1801 VALUES_FOLLOWED_BY_PAREN = True (base); MySQL overrides to False
 		// (parsers/mysql.py:303).
 		ValuesFollowedByParen: true,
+		// parser.py:1831 ZONE_AWARE_TIMESTAMP_CONSTRUCTOR = False (base); presto overrides to
+		// True (parsers/presto.py:61).
+		ZoneAwareTimestampConstructor: false,
 	}
 }
 
@@ -495,6 +507,8 @@ func GetOrRaise(name string) (*Dialect, error) {
 		return MySQL(), nil
 	case "postgres":
 		return Postgres(), nil
+	case "presto":
+		return Presto(), nil
 	default:
 		return nil, fmt.Errorf("unknown dialect %q", name)
 	}

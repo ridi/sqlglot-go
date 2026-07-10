@@ -418,10 +418,10 @@ func (p *Parser) parseDcolon() exp.Expression {
 	return p.parseTypes(false, false, true, false)
 }
 
-// parseString ports _parse_string + STRING_PARSERS (parser.py:1122-1136, 8519-8523):
+// parseString ports _parse_string + STRING_PARSERS (parser.py:1122-1141, 8519-8523):
 // plain STRING -> Literal, HEREDOC_STRING (postgres `$$...$$`) / RAW_STRING -> RawString,
-// and NATIONAL_STRING -> National. UNICODE_STRING is not modeled yet (its node isn't
-// ported), so it still falls through to parsePlaceholder.
+// NATIONAL_STRING -> National, and UNICODE_STRING (e.g. Presto's `U&'...'`) -> UnicodeString.
+// The UESCAPE clause of UNICODE_STRING (parser.py:1135-1140) is deferred - `escape` stays unset.
 func (p *Parser) parseString() exp.Expression {
 	if p.match(tokens.STRING) {
 		return p.expression(exp.LiteralString(p.prev.Text), &p.prev, nil)
@@ -431,6 +431,9 @@ func (p *Parser) parseString() exp.Expression {
 	}
 	if p.match(tokens.NATIONAL_STRING) {
 		return p.expression(exp.National(exp.Args{"this": p.prev.Text}), &p.prev, nil)
+	}
+	if p.match(tokens.UNICODE_STRING) {
+		return p.expression(exp.UnicodeString(exp.Args{"this": p.prev.Text}), &p.prev, nil)
 	}
 	return p.parsePlaceholder()
 }

@@ -170,6 +170,29 @@ transpilation, the other 30+ dialects. Corpus: RIDI's real Athena queries (sampl
 `platform-athena` + siblings) — kept OUT of the public repo (internal SQL); used as a local
 regression oracle only.
 
+Landed (2026-07) — Presto parser + tokenizer (part of Slice 2, atop the committed parser-override
+seam): `dialects.Presto()` (class flags, tokenizer config, `d.Functions` overlay of 34 entries), the
+`ZONE_AWARE_TIMESTAMP_CONSTRUCTOR` cast promotion (`TIMESTAMP '<zoned literal>'` → TIMESTAMPTZ, Presto-
+gated, zero base impact), the `U&'...'` UNICODE_STRING path, and the TRIM function-parser disable. On
+the RIDI corpus (2,002 raw non-templated queries) Presto structures 1,935 with 0 Command fallbacks vs
+Postgres 1,934/0 — matches-and-beats the baseline. Known divergences for this slice (differential-
+tested vs Python 30.12.0):
+- Generator TRANSFORMS/TYPE_MAPPING deferred (out of scope), so a structured function whose canonical
+  class name differs from its Presto spelling round-trips to the CANONICAL name via the base generator
+  (faithful to upstream presto-read + base-write): `ARBITRARY`→`ANY_VALUE`, `CARDINALITY`→`ARRAY_LENGTH`,
+  `ROW`→`STRUCT`, `DAY_OF_WEEK`→`DAYOFWEEK_ISO`, `MD5`→`MD5_DIGEST`, `SHA256`→`SHA2(x, 256)`,
+  `BITWISE_AND(a,b)`→`a & b`. The four acronym class names (`JSON_FORMAT`/`MD5_DIGEST`/`SHA2`/
+  `DAYOFWEEK_ISO`) render via `generator/name.go` sqlNameOverrides mirroring upstream `_sql_names`
+  (the camelToSnake split would otherwise emit `J_S_O_N_FORMAT` etc.).
+- FUNCTIONS entries needing unported helpers stay Anonymous (fail-closed, lineage-safe, round-trip
+  verbatim): DATE_FORMAT/DATE_PARSE/DATE_TRUNC/TO_CHAR (need build_formatted_time / TIME_MAPPING /
+  date_trunc_to_time) and REGEXP_EXTRACT/REGEXP_EXTRACT_ALL/REGEXP_REPLACE (need build_regexp_extract
+  + the default-group arg). LOCALTIME/LOCALTIMESTAMP, MATCH_RECOGNIZE grammar, TABLE_ALIAS_TOKENS
+  |= {ANTI,SEMI}, and the `U&'...'` UESCAPE clause are also deferred (see plan).
+- `TRIM(BOTH x FROM y)` fails to parse under Presto (Expecting `)`) — FAITHFUL to upstream, which drops
+  TRIM from FUNCTION_PARSERS (presto.py:137), making the special TRIM grammar unreachable. This is the
+  single corpus query Presto errors on where Postgres (which keeps the TRIM parser) succeeds.
+
 Historical note: earlier entries below tagged items "off probe's critical path" / "fail-closed" —
 that framing referred to a since-removed external consumer. For this repo they are simply parity gaps.
 

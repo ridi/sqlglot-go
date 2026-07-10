@@ -592,6 +592,30 @@ const (
 	KindUppercaseColumnConstraint
 	KindWithOperator
 	KindInOutColumnConstraint
+	// presto cluster: Func-trait Kinds referenced by the Presto FUNCTIONS overlay
+	// (dialects/presto.go). Appended at the end of the iota block so existing Kind
+	// values are not renumbered (values aren't serialized - additive-safe). Each cites
+	// its upstream class in the parallel tables below and in expressions/presto_nodes.go.
+	KindAnyValue         // aggregate.py:17
+	KindApproxQuantile   // aggregate.py:234
+	KindArrayUniqueAgg   // aggregate.py:83
+	KindDayOfWeekIso     // temporal.py:217
+	KindDecode           // string.py:285
+	KindEncode           // string.py:289
+	KindJSONFormat       // json.py:145
+	KindLevenshtein      // string.py:74
+	KindMD5Digest        // string.py:540
+	KindSHA2             // string.py:562
+	KindStrToMap         // string.py:203
+	KindTimeToUnix       // temporal.py:484
+	KindUnixToTime       // temporal.py:532
+	KindUnhex            // string.py:405
+	KindArraySlice       // array.py:85
+	KindCurrentTimestamp // temporal.py:37
+	// KindUnicodeString is exp.UnicodeString (query.py:494, `U&'...'`), a primitive
+	// Condition (NOT a Func) - it has no functionFallbackSQL path, so the generator
+	// supplies a dedicated dispatch method (mirrors KindNational's `N'...'`).
+	KindUnicodeString // query.py:494
 )
 
 type Trait uint32
@@ -1111,6 +1135,25 @@ var argTypes = map[Kind][]argSpec{
 	KindUppercaseColumnConstraint:    {},
 	KindWithOperator:                 {{"this", true}, {"op", true}},
 	KindInOutColumnConstraint:        {{"input_", false}, {"output", false}, {"variadic", false}},
+	// presto cluster: arg_types mirrored 1:1 from the upstream classes (dict order drives
+	// FromArgList positional mapping). See expressions/presto_nodes.go for per-Kind citations.
+	KindAnyValue:         defaultArgTypes,                                                                                                                      // aggregate.py:17 (pass -> {"this": True})
+	KindApproxQuantile:   {{"this", true}, {"quantile", true}, {"accuracy", false}, {"weight", false}, {"error_tolerance", false}},                             // aggregate.py:234
+	KindArrayUniqueAgg:   defaultArgTypes,                                                                                                                      // aggregate.py:83 (pass)
+	KindDayOfWeekIso:     defaultArgTypes,                                                                                                                      // temporal.py:217 (pass)
+	KindDecode:           {{"this", true}, {"charset", true}, {"replace", false}},                                                                              // string.py:285
+	KindEncode:           {{"this", true}, {"charset", true}},                                                                                                  // string.py:289
+	KindJSONFormat:       {{"this", false}, {"options", false}, {"is_json", false}, {"to_json", false}},                                                        // json.py:145
+	KindLevenshtein:      {{"this", true}, {"expression", false}, {"ins_cost", false}, {"del_cost", false}, {"sub_cost", false}, {"max_dist", false}},          // string.py:74
+	KindMD5Digest:        {{"this", true}, {"expressions", false}},                                                                                             // string.py:540 (is_var_len_args)
+	KindSHA2:             {{"this", true}, {"length", false}},                                                                                                  // string.py:562
+	KindStrToMap:         {{"this", true}, {"pair_delim", false}, {"key_value_delim", false}, {"duplicate_resolution_callback", false}},                        // string.py:203
+	KindTimeToUnix:       defaultArgTypes,                                                                                                                      // temporal.py:484 (pass)
+	KindUnixToTime:       {{"this", true}, {"scale", false}, {"zone", false}, {"hours", false}, {"minutes", false}, {"format", false}, {"target_type", false}}, // temporal.py:532
+	KindUnhex:            {{"this", true}, {"expression", false}},                                                                                              // string.py:405
+	KindArraySlice:       {{"this", true}, {"start", true}, {"end", false}, {"step", false}, {"zero_based", false}},                                            // array.py:85
+	KindCurrentTimestamp: {{"this", false}, {"sysdate", false}},                                                                                                // temporal.py:37
+	KindUnicodeString:    {{"this", true}, {"escape", false}},                                                                                                  // query.py:494
 }
 
 var traitsOf = map[Kind]Trait{
@@ -1337,6 +1380,27 @@ var traitsOf = map[Kind]Trait{
 	KindLag:              TraitCondition | TraitFunc | TraitAggFunc,
 	KindLead:             TraitCondition | TraitFunc | TraitAggFunc,
 	KindConcat:           TraitCondition | TraitFunc,
+	// presto cluster: Func(Condition) subclasses get TraitCondition|TraitFunc (so they
+	// render via generator.functionFallbackSQL); AggFunc subclasses add TraitAggFunc
+	// (core.py:1574/1641/1694). KindUnicodeString is Expression,Condition (query.py:494) -
+	// NO TraitFunc; its dispatch is supplied by the generator, so it gets only TraitCondition.
+	KindAnyValue:         TraitCondition | TraitFunc | TraitAggFunc,
+	KindApproxQuantile:   TraitCondition | TraitFunc | TraitAggFunc,
+	KindArrayUniqueAgg:   TraitCondition | TraitFunc | TraitAggFunc,
+	KindDayOfWeekIso:     TraitCondition | TraitFunc,
+	KindDecode:           TraitCondition | TraitFunc,
+	KindEncode:           TraitCondition | TraitFunc,
+	KindJSONFormat:       TraitCondition | TraitFunc,
+	KindLevenshtein:      TraitCondition | TraitFunc,
+	KindMD5Digest:        TraitCondition | TraitFunc,
+	KindSHA2:             TraitCondition | TraitFunc,
+	KindStrToMap:         TraitCondition | TraitFunc,
+	KindTimeToUnix:       TraitCondition | TraitFunc,
+	KindUnixToTime:       TraitCondition | TraitFunc,
+	KindUnhex:            TraitCondition | TraitFunc,
+	KindArraySlice:       TraitCondition | TraitFunc,
+	KindCurrentTimestamp: TraitCondition | TraitFunc,
+	KindUnicodeString:    TraitCondition,
 }
 
 var primitive = map[Kind]bool{
@@ -1346,6 +1410,9 @@ var primitive = map[Kind]bool{
 	KindBoolean:    true,
 	// slice-strings cluster: National is_primitive=True (query.py:585-586).
 	KindNational: true,
+	// presto cluster: UnicodeString is_primitive=True (query.py:494), like National -
+	// its `U&'...'` literal round-trip relies on the primitive flag.
+	KindUnicodeString: true,
 	// residual-tail cluster: BitString/HexString/ByteString is_primitive=True (query.py:
 	// 471-487).
 	KindBitString:  true,
@@ -1738,6 +1805,24 @@ var className = map[Kind]string{
 	KindUppercaseColumnConstraint:           "UppercaseColumnConstraint",
 	KindWithOperator:                        "WithOperator",
 	KindInOutColumnConstraint:               "InOutColumnConstraint",
+	// presto cluster: class names match the upstream Presto FUNCTIONS canonical class.
+	KindAnyValue:         "AnyValue",
+	KindApproxQuantile:   "ApproxQuantile",
+	KindArrayUniqueAgg:   "ArrayUniqueAgg",
+	KindDayOfWeekIso:     "DayOfWeekIso",
+	KindDecode:           "Decode",
+	KindEncode:           "Encode",
+	KindJSONFormat:       "JSONFormat",
+	KindLevenshtein:      "Levenshtein",
+	KindMD5Digest:        "MD5Digest",
+	KindSHA2:             "SHA2",
+	KindStrToMap:         "StrToMap",
+	KindTimeToUnix:       "TimeToUnix",
+	KindUnixToTime:       "UnixToTime",
+	KindUnhex:            "Unhex",
+	KindArraySlice:       "ArraySlice",
+	KindCurrentTimestamp: "CurrentTimestamp",
+	KindUnicodeString:    "UnicodeString",
 }
 
 // varLenArgs is the authoritative is_var_len_args=True set (mirroring the upstream Func
@@ -1761,6 +1846,8 @@ var varLenArgs = map[Kind]bool{
 	KindDate:              true,
 	KindChr:               true,
 	KindConcat:            true,
+	// presto cluster: MD5Digest is_var_len_args=True (string.py:540).
+	KindMD5Digest: true,
 }
 
 // ArgKeys returns the arg keys of a Kind in class-declaration order (mirrors
