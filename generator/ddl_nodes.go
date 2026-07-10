@@ -32,21 +32,20 @@ func init() {
 	dispatch[expressions.KindTriggerReferencing] = (*Generator).triggerReferencingSQL
 }
 
-// propertiesSQL ports root_properties (generator.py:2044-2047): a plain, unindented,
-// space-separated list. Upstream's full properties_sql/locate_properties (generator.py:
-// 2019-2076) additionally splits a Properties list by exp.Properties.Location (POST_SCHEMA
-// vs POST_WITH vs ...) and create_sql places each bucket at a different position around
-// "AS <expression>". This port's property set is entirely POST_SCHEMA (verified against
-// generator.py:672-800 PROPERTIES_LOCATION for every Kind this file dispatches), and
-// createSQL's caller always positions the rendered properties string immediately after
-// `this` and before " AS <expression>" - which is byte-identical to the POST_SCHEMA
-// placement in every case this port's properties are used, and coincides with POST_EXPRESSION
-// too whenever expression is empty (true for every CREATE TRIGGER, the only current
-// non-POST_SCHEMA producer - see TriggerProperties above). So the location-bucketing
-// machinery is deliberately not ported (documented divergence): this always renders as if
-// every property were POST_SCHEMA.
+// propertiesSQL ports properties_sql (generator.py:2019-2042). CREATE first buckets the
+// complete property list by location; this method renders the POST_SCHEMA subset as a flat,
+// space-separated root list and the POST_WITH subset as one comma-separated WITH (...) block.
 func (g *Generator) propertiesSQL(e expressions.Expression) string {
-	return g.expressions(exprsOptions{expression: e, noIndent: true, sep: " "})
+	locations := g.locateProperties(e)
+	rootProperties := g.propertiesExpression(locations[propertyLocationPostSchema], e.Parent())
+	withProperties := g.propertiesExpression(locations[propertyLocationPostWith], e.Parent())
+
+	rootSQL := g.rootPropertiesSQL(rootProperties)
+	withSQL := g.withPropertiesSQL(withProperties)
+	if rootSQL != "" && withSQL != "" && !g.pretty {
+		withSQL = " " + withSQL
+	}
+	return rootSQL + withSQL
 }
 
 // userdefinedfunction_sql (generator.py:4715-4721). no_identify is not ported (this port has

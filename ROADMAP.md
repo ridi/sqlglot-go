@@ -306,3 +306,47 @@ TestReviewFindingsFixes):
   `VARIADIC(x)` degraded to `VARIADIC AS (x)`; it now parses as an ordinary function call, and a
   bare `VARIADIC` stays a column in base/mysql (parsers/postgres.py:142; per-dialect table deferred
   to slice 5b).
+
+Resolved in the CREATE-properties fidelity slice (drove a 95-row Python-oracle AST/SQL gate,
+testdata/fidelity_cases.txt + fidelity_test.go; corpus stays 955/424/468 base/mysql/postgres, all
+1847 records passing, parity_gaps.txt empty; the full-corpus Go-vs-Python Command audit went from
+94 Go-only degradations to 1 — see the deferred Heredoc item below):
+- AST (expressions/kinds.go + expressions/fidelity_*.go): added the property/query/constraint node
+  families needed to model the worklist — Algorithm/AutoIncrement/Collate/Definer/Engine/Inherits/
+  Like/Lock/Locking/Materialized/NoPrimaryIndex/OnCommit/PartitionedBy/PartitionByRange/
+  PartitionByList/PartitionedOf/SchemaComment/SqlReadWrite/Temporary/Unlogged/WithData properties,
+  PartitionList/PartitionBoundSpec/PartitionRange, AnalyzeHistogram/AnalyzeWith/UsingData, and the
+  Compress/DateFormat/Exclude/InlineLength/Title/Uppercase/WithOperator/InOut column constraints.
+  This is the worklist subset, NOT the full upstream 80+ PROPERTIES / all DDL constraints.
+- Parser: real _parse_properties loop + POST_CREATE/NAME/SCHEMA/WITH/ALIAS/EXPRESSION/INDEX property
+  placement in _parse_create; CREATE TYPE enum/composite; bare UNIQUE/PRIMARY/AMP indexes; postgres
+  function parameter modes (InOutColumnConstraint); MySQL RANGE/LIST partition DDL; MySQL ALTER
+  options + AUTO_INCREMENT; EXCLUDE / WITH-storage / reserved WITH-operator constraints; MySQL
+  ANALYZE ... HISTOGRAM and structured COMMENT ON FUNCTION/PROCEDURE.
+- Generator: PROPERTIES_LOCATION bucketing + dedicated renderers, full CREATE assembly order, MySQL
+  partition rendering, postgres columndef_sql placing the parameter mode before the name (side-
+  effect-free, does not pop() the constraint), and the new constraint/analyze renderers.
+- Integration ToS-fidelity fixes so repr()==ToS() exactly (verified generation + Equal/hash are
+  untouched — they use truthy()/isFalse and skip false/empty): arg-order rows for Create/Alter/
+  UniqueColumnConstraint/IndexParameters now follow the parser's constructor-kwarg order (what
+  repr's dict-insertion order reflects), not the class arg_types order; DType renders as its enum
+  member name "DType.<NAME>" (USERDEFINED name != value); _parse_types sets nested on the scalar
+  branch; parseExists returns the bool False (not nil) like upstream's and-chain, so Alter/Drop/
+  Insert/Truncate/ColumnDef carry exists=False; Node.IsLeaf/isEmptyList handle a non-empty/empty
+  []string (AnalyzeWith, UniqueColumnConstraint.options); UNIQUE index_type defaults to False;
+  CollateProperty.default is set only under a leading DEFAULT (unlike CharacterSetProperty).
+- Gate floors (fidelity_test.go): >=95 cases, >=93 command-free. Two command_exception rows are
+  legitimate upstream nested Commands — `CREATE FUNCTION ... SET search_path TO 'public' AS ...` and
+  the sibling SET-config row — whose SetConfigProperty.this is itself a Command in the pinned tree
+  (_parse_set returns Command mid-CREATE, parser.py:9265-9275), so a Command-free port is impossible
+  there; the root stays Create.
+- Two ast_divergence rows (MySQL `PARTITION BY RANGE (YEAR|MONTH(col))`): upstream wraps all 11 MySQL
+  date functions in TsOrDsToDate in the parser and removes it in the generator; this port elides
+  both consistently (no exp.TsOrDsToDate Kind — generator/dialect_funcs.go). The CREATE parses to a
+  full PartitionByRangeProperty and round-trips to identical SQL; only the incidental partition-
+  expression arg shape differs, so want_ast stays the honest Python oracle and only the exact ToS()
+  match is relaxed (capped at maxASTDivergences=2). Closing it belongs to the function-parity slice.
+- Deferred (the 1 remaining full-corpus Go-only Command, outside the worklist): postgres
+  `CREATE FUNCTION ... AS $$ ... $$` dollar-quoted (heredoc) UDF body degrades to Command because
+  exp.Heredoc is not modeled (parser_ddl.go:258-269 fails closed; round-trips verbatim, so the
+  corpus stays green). Adding exp.Heredoc is separate function/body-parsing work.

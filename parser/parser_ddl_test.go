@@ -38,9 +38,13 @@ func TestParseCreate(t *testing.T) {
 		t.Fatalf("IF NOT EXISTS mismatch:\n%s", create.ToS())
 	}
 
-	command := parseOne(t, "CREATE TABLE t (a INT) ENGINE=InnoDB")
-	if command.Kind() != exp.KindCommand {
-		t.Fatalf("property-bearing CREATE should degrade to Command:\n%s", command.ToS())
+	create = parseOne(t, "CREATE TABLE t (a INT) ENGINE=InnoDB")
+	if create.Kind() != exp.KindCreate {
+		t.Fatalf("property-bearing CREATE mismatch:\n%s", create.ToS())
+	}
+	properties := expressionsForArg(exprArg(t, create, "properties"), "expressions")
+	if len(properties) != 1 || properties[0].Kind() != exp.KindEngineProperty || properties[0].Name() != "InnoDB" {
+		t.Fatalf("ENGINE property mismatch:\n%s", create.ToS())
 	}
 
 	// Column constraints are structured as of this DDL slice (parser_ddl.go/

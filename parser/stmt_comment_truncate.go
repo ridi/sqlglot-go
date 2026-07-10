@@ -25,11 +25,8 @@ func buildCommentTableAliasTokens() map[tokens.TokenType]bool {
 }
 
 // parseComment ports _parse_comment (parser.py:2192-2222): `COMMENT ON <kind> <target>
-// IS <string>`. Degrades to a Command (via parseAsCommand) whenever ON isn't followed
-// by a recognized creatable (e.g. a stray/garbled statement) or the creatable is
-// FUNCTION/PROCEDURE - UDF-qualified COMMENT targets need _parse_user_defined_function,
-// which isn't ported in this slice. Because the corpus check is byte-identical
-// round-trip and this case is an identity case, the Command degrade still closes it.
+// IS <string>`. It degrades to a Command via parseAsCommand only when ON isn't followed
+// by a recognized creatable or when the comment body cannot be parsed structurally.
 func (p *Parser) parseComment() exp.Expression {
 	start := p.prev
 	exists := p.parseExists(false)
@@ -42,12 +39,10 @@ func (p *Parser) parseComment() exp.Expression {
 	}
 	kind := p.prev
 
-	if kind.TokenType == tokens.FUNCTION || kind.TokenType == tokens.PROCEDURE {
-		return p.parseAsCommand(start)
-	}
-
 	var this exp.Expression
 	switch kind.TokenType {
+	case tokens.FUNCTION, tokens.PROCEDURE:
+		this = p.parseUserDefinedFunction()
 	case tokens.TABLE:
 		this = p.parseTable(false, false, commentTableAliasTokens, false, false, false, false)
 	case tokens.COLUMN:

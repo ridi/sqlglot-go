@@ -2,6 +2,7 @@ package generator
 
 import (
 	"strings"
+	"unicode"
 
 	"github.com/sjincho/sqlglot-go/expressions"
 )
@@ -28,8 +29,12 @@ func init() {
 	dispatch[expressions.KindIndexParameters] = (*Generator).indexParametersSQL
 	dispatch[expressions.KindColumnPrefix] = (*Generator).columnPrefixSQL
 	dispatch[expressions.KindColumnPosition] = (*Generator).columnPositionSQL
+	dispatch[expressions.KindCompressColumnConstraint] = (*Generator).compressColumnConstraintSQL
+	dispatch[expressions.KindExcludeColumnConstraint] = (*Generator).excludeColumnConstraintSQL
+	dispatch[expressions.KindWithOperator] = (*Generator).withOperatorSQL
+	dispatch[expressions.KindInOutColumnConstraint] = (*Generator).inOutColumnConstraintSQL
 
-	// TRANSFORMS one-liners (generator.py:149-242, exact lambdas transcribed verbatim).
+	// TRANSFORMS one-liners (generator.py:149-293, exact lambdas transcribed verbatim).
 	dispatch[expressions.KindCollateColumnConstraint] = func(g *Generator, e expressions.Expression) string {
 		return "COLLATE " + g.sqlKey(e, "this")
 	}
@@ -39,6 +44,18 @@ func init() {
 	}
 	dispatch[expressions.KindCharacterSetColumnConstraint] = func(g *Generator, e expressions.Expression) string {
 		return "CHARACTER SET " + g.sqlKey(e, "this")
+	}
+	dispatch[expressions.KindDateFormatColumnConstraint] = func(g *Generator, e expressions.Expression) string {
+		return "FORMAT " + g.sqlKey(e, "this")
+	}
+	dispatch[expressions.KindInlineLengthColumnConstraint] = func(g *Generator, e expressions.Expression) string {
+		return "INLINE LENGTH " + g.sqlKey(e, "this")
+	}
+	dispatch[expressions.KindTitleColumnConstraint] = func(g *Generator, e expressions.Expression) string {
+		return "TITLE " + g.sqlKey(e, "this")
+	}
+	dispatch[expressions.KindUppercaseColumnConstraint] = func(_ *Generator, _ expressions.Expression) string {
+		return "UPPERCASE"
 	}
 	dispatch[expressions.KindOnUpdateColumnConstraint] = func(g *Generator, e expressions.Expression) string {
 		return "ON UPDATE " + g.sqlKey(e, "this")
@@ -71,6 +88,53 @@ func (g *Generator) commentColumnConstraintSQL(e expressions.Expression) string 
 		return ""
 	}
 	return "COMMENT " + g.sqlKey(e, "this")
+}
+
+// compressColumnConstraintSQL ports compresscolumnconstraint_sql (generator.py:1203-1209).
+func (g *Generator) compressColumnConstraintSQL(e expressions.Expression) string {
+	var this string
+	switch e.Arg("this").(type) {
+	case []expressions.Expression, []any:
+		this = g.wrap(g.expressions(exprsOptions{expression: e, key: "this", flat: true}))
+	default:
+		this = g.sqlKey(e, "this")
+	}
+	return "COMPRESS " + this
+}
+
+// excludeColumnConstraintSQL ports the ExcludeColumnConstraint TRANSFORM
+// (generator.py:190), including the left trim needed because IndexParameters begins with a
+// leading space when it has a USING method but no columns prefix.
+func (g *Generator) excludeColumnConstraintSQL(e expressions.Expression) string {
+	return "EXCLUDE " + strings.TrimLeftFunc(g.sqlKey(e, "this"), unicode.IsSpace)
+}
+
+// withOperatorSQL ports the WithOperator TRANSFORM (generator.py:293).
+func (g *Generator) withOperatorSQL(e expressions.Expression) string {
+	return g.sqlKey(e, "this") + " WITH " + g.sqlKey(e, "op")
+}
+
+// inOutColumnConstraintSQL ports inoutcolumnconstraint_sql (generator.py:1279-1295).
+// Postgres spells the combined mode INOUT; the base generator uses IN OUT.
+func (g *Generator) inOutColumnConstraintSQL(e expressions.Expression) string {
+	if boolValue(e.Arg("variadic")) {
+		return "VARIADIC"
+	}
+	input := boolValue(e.Arg("input_"))
+	output := boolValue(e.Arg("output"))
+	if input && output {
+		if g.dialect.Name == "postgres" {
+			return "INOUT"
+		}
+		return "IN OUT"
+	}
+	if input {
+		return "IN"
+	}
+	if output {
+		return "OUT"
+	}
+	return ""
 }
 
 // columnConstraintSQL ports columnconstraint_sql (generator.py:1184-1187).
@@ -381,9 +445,8 @@ func (g *Generator) primaryKeySQL(e expressions.Expression) string {
 }
 
 // indexParametersSQL ports indexparameters_sql (generator.py:1926-1944): the trailing index-
-// parameter block (a PRIMARY KEY's INCLUDE (...) etc.). The columns/with_storage keys are never
-// populated by this port's parseIndexParams (they're only reachable via the unported
-// EXCLUDE constraint) but are rendered here verbatim for faithfulness to the upstream method.
+// parameter block shared by PRIMARY KEY, CREATE INDEX, and EXCLUDE, including EXCLUDE columns
+// and generic WITH (...) storage properties.
 func (g *Generator) indexParametersSQL(e expressions.Expression) string {
 	using := g.sqlKey(e, "using")
 	if using != "" {
@@ -402,9 +465,12 @@ func (g *Generator) indexParametersSQL(e expressions.Expression) string {
 	if include != "" {
 		include = " INCLUDE (" + include + ")"
 	}
-	withStorage := g.expressions(exprsOptions{expression: e, key: "with_storage", flat: true})
-	if withStorage != "" {
-		withStorage = " WITH (" + withStorage + ")"
+	withStorage := ""
+	if truthy(e.Arg("with_storage")) {
+		withStorage = g.expressions(exprsOptions{expression: e, key: "with_storage", flat: true})
+		if withStorage != "" {
+			withStorage = " WITH (" + withStorage + ")"
+		}
 	}
 	tablespace := g.sqlKey(e, "tablespace")
 	if tablespace != "" {

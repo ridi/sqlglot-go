@@ -109,36 +109,90 @@ func TestParseAnalyzeStructured(t *testing.T) {
 	}
 }
 
-// TestParseAnalyzeCommandDegrade covers inputs whose grammar this slice doesn't
-// structurally port: mysql's HISTOGRAM sub-family, i.e. ANALYZE_EXPRESSION_PARSERS'
-// DROP/UPDATE branches (parser.py:1731-1740). Each degrades to a raw exp.Command that
-// round-trips the original source text byte-identically (testdata/parity_gaps.txt).
-func TestParseAnalyzeCommandDegrade(t *testing.T) {
+// TestParseAnalyzeHistogram ports mysql's ANALYZE_EXPRESSION_PARSERS DROP/UPDATE
+// branches and _parse_analyze_histogram (parser.py:1731-1740,9113-9150).
+func TestParseAnalyzeHistogram(t *testing.T) {
 	cases := []struct {
-		dialect string
-		sql     string
+		sql           string
+		action        string
+		hasInner      bool
+		innerKind     exp.Kind
+		withPhrases   []string
+		usingData     string
+		updateOptions string
 	}{
-		{"mysql", "ANALYZE tbl DROP HISTOGRAM ON col1"},
-		{"mysql", "ANALYZE tbl UPDATE HISTOGRAM ON col1"},
-		{"mysql", "ANALYZE tbl UPDATE HISTOGRAM ON col1 USING DATA 'json_data'"},
-		{"mysql", "ANALYZE tbl UPDATE HISTOGRAM ON col1 WITH 5 BUCKETS"},
-		{"mysql", "ANALYZE tbl UPDATE HISTOGRAM ON col1 WITH 5 BUCKETS AUTO UPDATE"},
-		{"mysql", "ANALYZE tbl UPDATE HISTOGRAM ON col1 WITH 5 BUCKETS MANUAL UPDATE"},
+		{sql: "ANALYZE tbl DROP HISTOGRAM ON col1", action: "DROP"},
+		{sql: "ANALYZE tbl UPDATE HISTOGRAM ON col1", action: "UPDATE"},
+		{sql: "ANALYZE tbl UPDATE HISTOGRAM ON col1 USING DATA 'json_data'", action: "UPDATE", hasInner: true, innerKind: exp.KindUsingData, usingData: "json_data"},
+		{sql: "ANALYZE tbl UPDATE HISTOGRAM ON col1 WITH 5 BUCKETS", action: "UPDATE", hasInner: true, innerKind: exp.KindAnalyzeWith, withPhrases: []string{"5 BUCKETS"}},
+		{sql: "ANALYZE tbl UPDATE HISTOGRAM ON col1 WITH 5 BUCKETS AUTO UPDATE", action: "UPDATE", hasInner: true, innerKind: exp.KindAnalyzeWith, withPhrases: []string{"5 BUCKETS"}, updateOptions: "AUTO"},
+		{sql: "ANALYZE tbl UPDATE HISTOGRAM ON col1 WITH 5 BUCKETS MANUAL UPDATE", action: "UPDATE", hasInner: true, innerKind: exp.KindAnalyzeWith, withPhrases: []string{"5 BUCKETS"}, updateOptions: "MANUAL"},
 	}
+
 	for _, c := range cases {
-		analyze := parseOneDialect(t, c.sql, c.dialect)
-		if analyze.Kind() != exp.KindCommand {
-			t.Fatalf("%q (%s): kind = %v, want Command:\n%s", c.sql, c.dialect, analyze.Kind(), analyze.ToS())
+		analyze := parseOneDialect(t, c.sql, "mysql")
+		if analyze.Kind() != exp.KindAnalyze {
+			t.Fatalf("%q: kind = %v, want Analyze:\n%s", c.sql, analyze.Kind(), analyze.ToS())
 		}
-		if this := analyze.Arg("this"); this != "ANALYZE" {
-			t.Fatalf("%q (%s): command.this = %#v, want \"ANALYZE\":\n%s", c.sql, c.dialect, this, analyze.ToS())
+		if kind := analyze.Arg("kind"); kind != nil {
+			t.Fatalf("%q: kind = %#v, want nil:\n%s", c.sql, kind, analyze.ToS())
 		}
-		got, err := generateSQL(t, analyze, c.dialect)
+		if options := analyze.Arg("options"); options != nil {
+			t.Fatalf("%q: options = %#v, want nil:\n%s", c.sql, options, analyze.ToS())
+		}
+		table := exprArg(t, analyze, "this")
+		if table.Kind() != exp.KindTable || table.Name() != "tbl" {
+			t.Fatalf("%q: analyze target mismatch:\n%s", c.sql, analyze.ToS())
+		}
+
+		histogram := exprArg(t, analyze, "expression")
+		if histogram.Kind() != exp.KindAnalyzeHistogram || histogram.Text("this") != c.action {
+			t.Fatalf("%q: histogram action mismatch:\n%s", c.sql, analyze.ToS())
+		}
+		columns := expressionsForArg(histogram, "expressions")
+		if len(columns) != 1 || columns[0].Kind() != exp.KindColumn || columns[0].Name() != "col1" {
+			t.Fatalf("%q: histogram columns mismatch:\n%s", c.sql, analyze.ToS())
+		}
+		if c.updateOptions == "" {
+			if got := histogram.Arg("update_options"); got != nil {
+				t.Fatalf("%q: update_options = %#v, want nil:\n%s", c.sql, got, analyze.ToS())
+			}
+		} else if got := histogram.Text("update_options"); got != c.updateOptions {
+			t.Fatalf("%q: update_options = %q, want %q:\n%s", c.sql, got, c.updateOptions, analyze.ToS())
+		}
+
+		inner, _ := histogram.Arg("expression").(exp.Expression)
+		if !c.hasInner {
+			if inner != nil {
+				t.Fatalf("%q: unexpected histogram expression:\n%s", c.sql, analyze.ToS())
+			}
+		} else if inner == nil || inner.Kind() != c.innerKind {
+			t.Fatalf("%q: histogram expression kind mismatch:\n%s", c.sql, analyze.ToS())
+		} else if c.innerKind == exp.KindUsingData {
+			if data := exprArg(t, inner, "this"); data.Kind() != exp.KindLiteral || data.Text("this") != c.usingData {
+				t.Fatalf("%q: USING DATA mismatch:\n%s", c.sql, analyze.ToS())
+			}
+		} else {
+			phrases, ok := inner.Arg("expressions").([]string)
+			if !ok || len(phrases) != len(c.withPhrases) {
+				t.Fatalf("%q: WITH phrases = %#v, want %#v:\n%s", c.sql, inner.Arg("expressions"), c.withPhrases, analyze.ToS())
+			}
+			for i := range phrases {
+				if phrases[i] != c.withPhrases[i] {
+					t.Fatalf("%q: WITH phrases = %#v, want %#v:\n%s", c.sql, phrases, c.withPhrases, analyze.ToS())
+				}
+			}
+		}
+
+		if commands := analyze.FindAll(exp.KindCommand); len(commands) != 0 {
+			t.Fatalf("%q: found %d Command descendants:\n%s", c.sql, len(commands), analyze.ToS())
+		}
+		got, err := generateSQL(t, analyze, "mysql")
 		if err != nil {
-			t.Fatalf("Generate: %v", err)
+			t.Fatalf("%q: Generate: %v", c.sql, err)
 		}
 		if got != c.sql {
-			t.Fatalf("round-trip = %q, want %q", got, c.sql)
+			t.Fatalf("%q: round-trip = %q", c.sql, got)
 		}
 	}
 }

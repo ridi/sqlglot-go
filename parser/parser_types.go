@@ -269,7 +269,15 @@ func (p *Parser) parseTypes(checkFunc, schema, allowIdentifiers, withCollation b
 			p.retreat(index)
 			return nil
 		}
-		this = p.expression(exp.DataType(dataTypeArgs(dtype, expressions, nested)), nil, nil)
+		// Upstream's scalar branch (parser.py:6429-6433) always sets nested=nested
+		// (True or False), unlike the TZ/interval/null branches which omit it. The
+		// shared dataTypeArgs helper drops a false nested, so build args inline here
+		// to preserve the explicit nested=False that repr()/ToS() expects.
+		scalarArgs := exp.Args{"this": dtype, "nested": nested}
+		if len(expressions) > 0 {
+			scalarArgs["expressions"] = expressions
+		}
+		this = p.expression(exp.DataType(scalarArgs), nil, nil)
 
 		// Empty arrays/structs are allowed (parser.py:6436-6438): a captured inline
 		// constructor becomes CAST(<ARRAY|STRUCT>(values) AS <type>). parseType's

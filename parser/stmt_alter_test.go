@@ -475,24 +475,34 @@ func TestParseAlterOnlySchemaCheckCascade(t *testing.T) {
 	}
 }
 
-// TestParseAlterDegradesToCommand ports the documented-deferral Command-fallback cases:
-// mysql's ALGORITHM=/LOCK= trailer, AUTO_INCREMENT= property assignment, and an unrecognized
-// ALTER target (e.g. ALTER SEQUENCE, out of ALTERABLES).
-func TestParseAlterDegradesToCommand(t *testing.T) {
-	cases := []struct {
-		dialect string
-		sql     string
-	}{
-		{"mysql", "ALTER TABLE t1 ADD COLUMN x INT, ALGORITHM=INPLACE, LOCK=EXCLUSIVE"},
-		{"mysql", "ALTER TABLE t AUTO_INCREMENT=3000000000"},
-		{"", "ALTER SEQUENCE foo RESTART"},
+// TestParseAlterMySQLProperties ports MySQL's AUTO_INCREMENT action and trailing
+// ALGORITHM/LOCK options.
+func TestParseAlterMySQLProperties(t *testing.T) {
+	alter := parseOneDialect(t, "ALTER TABLE t1 ADD COLUMN x INT, ALGORITHM=INPLACE, LOCK=EXCLUSIVE", "mysql")
+	actions := alterActions(t, alter)
+	if len(actions) != 1 || actions[0].Kind() != exp.KindColumnDef {
+		t.Fatalf("ALTER actions mismatch:\n%s", alter.ToS())
 	}
-	for _, tc := range cases {
-		t.Run(tc.sql, func(t *testing.T) {
-			root := parseOneDialect(t, tc.sql, tc.dialect)
-			if root.Kind() != exp.KindCommand {
-				t.Fatalf("kind = %v, want Command (degrade):\n%s", root.Kind(), root.ToS())
-			}
-		})
+	options := expressionsForArg(alter, "options")
+	if len(options) != 2 || options[0].Kind() != exp.KindAlgorithmProperty || options[1].Kind() != exp.KindLockProperty {
+		t.Fatalf("ALTER options mismatch:\n%s", alter.ToS())
+	}
+	if options[0].Name() != "INPLACE" || options[1].Name() != "EXCLUSIVE" {
+		t.Fatalf("ALTER option values mismatch:\n%s", alter.ToS())
+	}
+
+	alter = parseOneDialect(t, "ALTER TABLE t AUTO_INCREMENT=3000000000", "mysql")
+	actions = alterActions(t, alter)
+	if len(actions) != 1 || actions[0].Kind() != exp.KindAutoIncrementProperty || actions[0].Name() != "3000000000" {
+		t.Fatalf("AUTO_INCREMENT action mismatch:\n%s", alter.ToS())
+	}
+}
+
+// TestParseAlterUnsupportedSequenceStaysCommand keeps the genuinely unsupported ALTER target
+// fail-closed.
+func TestParseAlterUnsupportedSequenceStaysCommand(t *testing.T) {
+	root := parseOne(t, "ALTER SEQUENCE foo RESTART")
+	if root.Kind() != exp.KindCommand {
+		t.Fatalf("kind = %v, want Command (degrade):\n%s", root.Kind(), root.ToS())
 	}
 }

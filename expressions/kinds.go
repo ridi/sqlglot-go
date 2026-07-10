@@ -550,6 +550,48 @@ const (
 	// parser.parseConcat - dialect-aware, since safe/coalesce depend on the dialect). CONCAT_WS
 	// stays Anonymous: it needs a separate exp.ConcatWs node, out of scope here.
 	KindConcat
+
+	// fidelity-properties/constraints/query cluster: CREATE/ALTER properties, column
+	// constraints, partition bounds, and ANALYZE options needed by the DDL fidelity slice.
+	// Upstream defines these as plain Expression, Property, or ColumnConstraintKind subclasses
+	// (properties.py:12-553, constraints.py:76-198, query.py:589-594,1879-1938), so none
+	// receive traitsOf, primitive, or varLenArgs rows below.
+	KindProperty
+	KindAlgorithmProperty
+	KindAutoIncrementProperty
+	KindCollateProperty
+	KindDefinerProperty
+	KindEngineProperty
+	KindInheritsProperty
+	KindLikeProperty
+	KindLockProperty
+	KindLockingProperty
+	KindMaterializedProperty
+	KindNoPrimaryIndexProperty
+	KindOnCommitProperty
+	KindPartitionedByProperty
+	KindPartitionByRangeProperty
+	KindPartitionByListProperty
+	KindPartitionList
+	KindPartitionBoundSpec
+	KindPartitionedOfProperty
+	KindSchemaCommentProperty
+	KindSqlReadWriteProperty
+	KindTemporaryProperty
+	KindUnloggedProperty
+	KindWithDataProperty
+	KindPartitionRange
+	KindAnalyzeHistogram
+	KindAnalyzeWith
+	KindUsingData
+	KindCompressColumnConstraint
+	KindDateFormatColumnConstraint
+	KindExcludeColumnConstraint
+	KindInlineLengthColumnConstraint
+	KindTitleColumnConstraint
+	KindUppercaseColumnConstraint
+	KindWithOperator
+	KindInOutColumnConstraint
 )
 
 type Trait uint32
@@ -727,45 +769,49 @@ var argTypes = map[Kind][]argSpec{
 	KindOnConflict:          {{"duplicate", false}, {"expressions", false}, {"action", false}, {"conflict_keys", false}, {"index_predicate", false}, {"constraint", false}, {"where", false}},
 	KindReturning:           {{"expressions", true}, {"into", false}},
 	KindInto:                {{"this", false}, {"temporary", false}, {"unlogged", false}, {"bulk_collect", false}, {"expressions", false}},
-	KindCreate:              {{"with_", false}, {"this", true}, {"kind", true}, {"expression", false}, {"exists", false}, {"properties", false}, {"replace", false}, {"refresh", false}, {"unique", false}, {"indexes", false}, {"no_schema_binding", false}, {"begin", false}, {"clone", false}, {"concurrently", false}, {"clustered", false}},
-	KindSchema:              {{"this", false}, {"expressions", false}},
-	KindCommand:             {{"this", true}, {"expression", false}},
-	KindPivot:               {{"this", false}, {"alias", false}, {"expressions", false}, {"fields", false}, {"unpivot", false}, {"using", false}, {"group", false}, {"columns", false}, {"include_nulls", false}, {"default_on_null", false}, {"into", false}, {"with_", false}, {"identify_pivot_strings", false}, {"prefixed_pivot_columns", false}, {"pivot_column_naming", false}},
-	KindLateral:             {{"this", true}, {"view", false}, {"outer", false}, {"alias", false}, {"cross_apply", false}, {"ordinality", false}},
-	KindValues:              {{"expressions", true}, {"alias", false}, {"order", false}, {"limit", false}, {"offset", false}},
-	KindColumnDef:           {{"this", true}, {"kind", false}, {"constraints", false}, {"exists", false}, {"position", false}, {"default", false}, {"output", false}, {"ordinality", false}},
-	KindDataType:            {{"this", true}, {"expressions", false}, {"nested", false}, {"values", false}, {"kind", false}, {"nullable", false}, {"collate", false}},
-	KindDataTypeParam:       {{"this", true}, {"expression", false}},
-	KindCast:                {{"this", true}, {"to", true}, {"format", false}, {"safe", false}, {"action", false}, {"default", false}},
-	KindTryCast:             {{"this", true}, {"to", true}, {"format", false}, {"safe", false}, {"action", false}, {"default", false}, {"requires_string", false}, {"null_on_text_overflow", false}, {"probe_date_format", false}},
-	KindCastToStrType:       {{"this", true}, {"to", true}},
-	KindExtract:             {{"this", true}, {"expression", true}},
-	KindStrPosition:         {{"this", true}, {"substr", true}, {"position", false}, {"occurrence", false}, {"clamp_position", false}},
-	KindSubstring:           {{"this", true}, {"start", false}, {"length", false}, {"zero_start", false}},
-	KindTrim:                {{"this", true}, {"expression", false}, {"position", false}, {"collation", false}},
-	KindCeil:                {{"this", true}, {"decimals", false}, {"to", false}},
-	KindFloor:               {{"this", true}, {"decimals", false}, {"to", false}},
-	KindGroupConcat:         {{"this", true}, {"separator", false}, {"on_overflow", false}},
-	KindUnnest:              {{"expressions", true}, {"alias", false}, {"offset", false}, {"explode_array", false}},
-	KindArray:               {{"expressions", false}, {"bracket_notation", false}, {"struct_name_inheritance", false}},
-	KindBracket:             {{"this", true}, {"expressions", true}, {"offset", false}, {"safe", false}, {"returns_list_for_maps", false}, {"json_access", false}},
-	KindLock:                {{"update", true}, {"expressions", false}, {"wait", false}, {"key", false}},
-	KindPreWhere:            defaultArgTypes,
-	KindCluster:             {{"expressions", true}},
-	KindDistribute:          {{"this", false}, {"expressions", true}, {"siblings", false}},
-	KindSort:                {{"this", false}, {"expressions", true}, {"siblings", false}},
-	KindWithinGroup:         {{"this", true}, {"expression", false}},
-	KindIgnoreNulls:         defaultArgTypes,
-	KindRespectNulls:        defaultArgTypes,
-	KindPivotAny:            {{"this", false}},
-	KindPivotAlias:          {{"this", true}, {"alias", false}},
-	KindInterval:            {{"this", false}, {"unit", false}},
-	KindIntervalSpan:        {{"this", true}, {"expression", true}},
-	KindJSONExtract:         {{"this", true}, {"expression", true}, {"only_json_types", false}, {"expressions", false}, {"variant_extract", false}, {"json_query", false}, {"option", false}, {"quote", false}, {"on_condition", false}, {"requires_json", false}, {"emits", false}},
-	KindJSONExtractScalar:   {{"this", true}, {"expression", true}, {"only_json_types", false}, {"expressions", false}, {"json_type", false}, {"scalar_only", false}},
-	KindJSONBExtract:        {{"this", true}, {"expression", true}},
-	KindJSONBExtractScalar:  {{"this", true}, {"expression", true}, {"json_type", false}},
-	KindJSONCast:            {{"this", true}, {"to", true}, {"format", false}, {"safe", false}, {"action", false}, {"default", false}},
+	// Arg order matches the order _parse_create sets kwargs (parser.py:2627-2643),
+	// which is what upstream repr() reflects (args are dict-insertion-ordered), NOT
+	// the Create.arg_types declaration order (ddl.py:40). with_ is never set by the
+	// parser (it lives inside the CTAS expression), so its position is inert here.
+	KindCreate:             {{"with_", false}, {"this", true}, {"kind", true}, {"replace", false}, {"refresh", false}, {"unique", false}, {"expression", false}, {"exists", false}, {"properties", false}, {"indexes", false}, {"no_schema_binding", false}, {"begin", false}, {"clone", false}, {"concurrently", false}, {"clustered", false}},
+	KindSchema:             {{"this", false}, {"expressions", false}},
+	KindCommand:            {{"this", true}, {"expression", false}},
+	KindPivot:              {{"this", false}, {"alias", false}, {"expressions", false}, {"fields", false}, {"unpivot", false}, {"using", false}, {"group", false}, {"columns", false}, {"include_nulls", false}, {"default_on_null", false}, {"into", false}, {"with_", false}, {"identify_pivot_strings", false}, {"prefixed_pivot_columns", false}, {"pivot_column_naming", false}},
+	KindLateral:            {{"this", true}, {"view", false}, {"outer", false}, {"alias", false}, {"cross_apply", false}, {"ordinality", false}},
+	KindValues:             {{"expressions", true}, {"alias", false}, {"order", false}, {"limit", false}, {"offset", false}},
+	KindColumnDef:          {{"this", true}, {"kind", false}, {"constraints", false}, {"exists", false}, {"position", false}, {"default", false}, {"output", false}, {"ordinality", false}},
+	KindDataType:           {{"this", true}, {"expressions", false}, {"nested", false}, {"values", false}, {"kind", false}, {"nullable", false}, {"collate", false}},
+	KindDataTypeParam:      {{"this", true}, {"expression", false}},
+	KindCast:               {{"this", true}, {"to", true}, {"format", false}, {"safe", false}, {"action", false}, {"default", false}},
+	KindTryCast:            {{"this", true}, {"to", true}, {"format", false}, {"safe", false}, {"action", false}, {"default", false}, {"requires_string", false}, {"null_on_text_overflow", false}, {"probe_date_format", false}},
+	KindCastToStrType:      {{"this", true}, {"to", true}},
+	KindExtract:            {{"this", true}, {"expression", true}},
+	KindStrPosition:        {{"this", true}, {"substr", true}, {"position", false}, {"occurrence", false}, {"clamp_position", false}},
+	KindSubstring:          {{"this", true}, {"start", false}, {"length", false}, {"zero_start", false}},
+	KindTrim:               {{"this", true}, {"expression", false}, {"position", false}, {"collation", false}},
+	KindCeil:               {{"this", true}, {"decimals", false}, {"to", false}},
+	KindFloor:              {{"this", true}, {"decimals", false}, {"to", false}},
+	KindGroupConcat:        {{"this", true}, {"separator", false}, {"on_overflow", false}},
+	KindUnnest:             {{"expressions", true}, {"alias", false}, {"offset", false}, {"explode_array", false}},
+	KindArray:              {{"expressions", false}, {"bracket_notation", false}, {"struct_name_inheritance", false}},
+	KindBracket:            {{"this", true}, {"expressions", true}, {"offset", false}, {"safe", false}, {"returns_list_for_maps", false}, {"json_access", false}},
+	KindLock:               {{"update", true}, {"expressions", false}, {"wait", false}, {"key", false}},
+	KindPreWhere:           defaultArgTypes,
+	KindCluster:            {{"expressions", true}},
+	KindDistribute:         {{"this", false}, {"expressions", true}, {"siblings", false}},
+	KindSort:               {{"this", false}, {"expressions", true}, {"siblings", false}},
+	KindWithinGroup:        {{"this", true}, {"expression", false}},
+	KindIgnoreNulls:        defaultArgTypes,
+	KindRespectNulls:       defaultArgTypes,
+	KindPivotAny:           {{"this", false}},
+	KindPivotAlias:         {{"this", true}, {"alias", false}},
+	KindInterval:           {{"this", false}, {"unit", false}},
+	KindIntervalSpan:       {{"this", true}, {"expression", true}},
+	KindJSONExtract:        {{"this", true}, {"expression", true}, {"only_json_types", false}, {"expressions", false}, {"variant_extract", false}, {"json_query", false}, {"option", false}, {"quote", false}, {"on_condition", false}, {"requires_json", false}, {"emits", false}},
+	KindJSONExtractScalar:  {{"this", true}, {"expression", true}, {"only_json_types", false}, {"expressions", false}, {"json_type", false}, {"scalar_only", false}},
+	KindJSONBExtract:       {{"this", true}, {"expression", true}},
+	KindJSONBExtractScalar: {{"this", true}, {"expression", true}, {"json_type", false}},
+	KindJSONCast:           {{"this", true}, {"to", true}, {"format", false}, {"safe", false}, {"action", false}, {"default", false}},
 	// JSONTable/JSONColumnDef/JSONSchema/FormatJson port JSON_TABLE(...) (parser.py:8166;
 	// expressions/json.py:206, expressions/query.py:2022-2042).
 	KindJSONTable:     {{"this", true}, {"schema", true}, {"path", false}, {"error_handling", false}, {"empty_handling", false}},
@@ -836,8 +882,11 @@ var argTypes = map[Kind][]argSpec{
 	KindForeignKey:                 {{"expressions", false}, {"reference", false}, {"delete", false}, {"update", false}, {"options", false}},
 	KindReference:                  {{"this", true}, {"expressions", false}, {"options", false}},
 	KindNotNullColumnConstraint:    {{"allow_null", false}},
-	KindUniqueColumnConstraint:     {{"this", false}, {"index_type", false}, {"on_conflict", false}, {"nulls", false}, {"options", false}},
-	KindCheckColumnConstraint:      {{"this", true}, {"enforced", false}},
+	// Arg order matches _parse_unique's constructor kwargs (parser.py:7511-7517:
+	// nulls, this, index_type, on_conflict, options) — the order repr() reflects —
+	// rather than the class arg_types declaration order (constraints.py:168).
+	KindUniqueColumnConstraint: {{"nulls", false}, {"this", false}, {"index_type", false}, {"on_conflict", false}, {"options", false}},
+	KindCheckColumnConstraint:  {{"this", true}, {"enforced", false}},
 	// Pure `pass` ColumnConstraintKind subclasses (constraints.py:32,52,68,72,84,155) inherit
 	// Expression's default arg_types ({"this": True}, core.py:85), since ColumnConstraintKind
 	// itself is `pass` (core.py:1605).
@@ -863,12 +912,18 @@ var argTypes = map[Kind][]argSpec{
 	KindInvisibleColumnConstraint:         {},
 	KindIndexColumnConstraint:             {{"this", false}, {"expressions", false}, {"kind", false}, {"index_type", false}, {"options", false}, {"expression", false}, {"granularity", false}},
 	KindIndexConstraintOption:             {{"key_block_size", false}, {"using", false}, {"parser", false}, {"comment", false}, {"visible", false}, {"engine_attr", false}, {"secondary_engine_attr", false}},
-	KindIndexParameters:                   {{"using", false}, {"include", false}, {"columns", false}, {"with_storage", false}, {"partition_by", false}, {"tablespace", false}, {"where", false}, {"on", false}},
-	KindColumnPrefix:                      {{"this", true}, {"expression", true}},
+	// Arg order matches _parse_index_params' constructor kwargs (parser.py: using,
+	// columns, include, partition_by, where, with_storage, tablespace, on) — the
+	// order repr() reflects — rather than the class arg_types declaration order.
+	KindIndexParameters: {{"using", false}, {"columns", false}, {"include", false}, {"partition_by", false}, {"where", false}, {"with_storage", false}, {"tablespace", false}, {"on", false}},
+	KindColumnPrefix:    {{"this", true}, {"expression", true}},
 	// ColumnPosition/AddPartition/DropPartition (query.py:498,1941,1949).
 	KindColumnPosition: {{"this", false}, {"position", true}},
 	// Alter/Drop/AlterColumn/... family (ddl.py:241-401).
-	KindAlter:        {{"this", false}, {"kind", true}, {"actions", true}, {"exists", false}, {"only", false}, {"options", false}, {"cluster", false}, {"not_valid", false}, {"check", false}, {"cascade", false}, {"iceberg", false}},
+	// Arg order matches _parse_alter's constructor kwargs (parser.py: this, kind,
+	// exists, actions, ...) — the order repr() reflects — rather than the class
+	// arg_types declaration order (ddl.py: this, kind, actions, exists, ...).
+	KindAlter:        {{"this", false}, {"kind", true}, {"exists", false}, {"actions", true}, {"only", false}, {"options", false}, {"cluster", false}, {"not_valid", false}, {"check", false}, {"cascade", false}, {"iceberg", false}},
 	KindDrop:         {{"this", false}, {"kind", false}, {"expressions", false}, {"exists", false}, {"temporary", false}, {"materialized", false}, {"cascade", false}, {"restrict", false}, {"constraints", false}, {"purge", false}, {"cluster", false}, {"concurrently", false}, {"sync", false}, {"iceberg", false}},
 	KindAlterColumn:  {{"this", true}, {"dtype", false}, {"collate", false}, {"using", false}, {"default", false}, {"drop", false}, {"comment", false}, {"allow_null", false}, {"visible", false}, {"rename_to", false}},
 	KindModifyColumn: {{"this", true}, {"rename_from", false}},
@@ -1017,6 +1072,45 @@ var argTypes = map[Kind][]argSpec{
 	KindLead: {{"this", true}, {"offset", false}, {"default", false}},
 	// KindConcat (string.py:29-31): {"expressions": True, "safe": False, "coalesce": False}.
 	KindConcat: {{"expressions", true}, {"safe", false}, {"coalesce", false}},
+	// Fidelity properties (properties.py:12-553), constraints (constraints.py:76-198),
+	// and query nodes (query.py:589-594,1879-1938). Pass-through subclasses inherit
+	// Expression's default {"this": True}; explicit empty dictionaries remain empty.
+	KindProperty:                     {{"this", true}, {"value", true}},
+	KindAlgorithmProperty:            {{"this", true}},
+	KindAutoIncrementProperty:        {{"this", true}},
+	KindCollateProperty:              {{"this", true}, {"default", false}},
+	KindDefinerProperty:              {{"this", true}},
+	KindEngineProperty:               {{"this", true}},
+	KindInheritsProperty:             {{"expressions", true}},
+	KindLikeProperty:                 {{"this", true}, {"expressions", false}},
+	KindLockProperty:                 {{"this", true}},
+	KindLockingProperty:              {{"this", false}, {"kind", true}, {"for_or_in", false}, {"lock_type", true}, {"override", false}},
+	KindMaterializedProperty:         {{"this", false}},
+	KindNoPrimaryIndexProperty:       {},
+	KindOnCommitProperty:             {{"delete", false}},
+	KindPartitionedByProperty:        {{"this", true}},
+	KindPartitionByRangeProperty:     {{"partition_expressions", true}, {"create_expressions", true}},
+	KindPartitionByListProperty:      {{"partition_expressions", true}, {"create_expressions", true}},
+	KindPartitionList:                {{"this", true}, {"expressions", true}},
+	KindPartitionBoundSpec:           {{"this", false}, {"expression", false}, {"from_expressions", false}, {"to_expressions", false}},
+	KindPartitionedOfProperty:        {{"this", true}, {"expression", true}},
+	KindSchemaCommentProperty:        {{"this", true}},
+	KindSqlReadWriteProperty:         {{"this", true}},
+	KindTemporaryProperty:            {{"this", false}},
+	KindUnloggedProperty:             {},
+	KindWithDataProperty:             {{"no", true}, {"statistics", false}},
+	KindPartitionRange:               {{"this", true}, {"expression", false}, {"expressions", false}},
+	KindAnalyzeHistogram:             {{"this", true}, {"expressions", true}, {"expression", false}, {"update_options", false}},
+	KindAnalyzeWith:                  {{"expressions", true}},
+	KindUsingData:                    defaultArgTypes,
+	KindCompressColumnConstraint:     {{"this", false}},
+	KindDateFormatColumnConstraint:   defaultArgTypes,
+	KindExcludeColumnConstraint:      defaultArgTypes,
+	KindInlineLengthColumnConstraint: defaultArgTypes,
+	KindTitleColumnConstraint:        defaultArgTypes,
+	KindUppercaseColumnConstraint:    {},
+	KindWithOperator:                 {{"this", true}, {"op", true}},
+	KindInOutColumnConstraint:        {{"input_", false}, {"output", false}, {"variadic", false}},
 }
 
 var traitsOf = map[Kind]Trait{
@@ -1608,6 +1702,42 @@ var className = map[Kind]string{
 	KindLag:                                 "Lag",
 	KindLead:                                "Lead",
 	KindConcat:                              "Concat",
+	KindProperty:                            "Property",
+	KindAlgorithmProperty:                   "AlgorithmProperty",
+	KindAutoIncrementProperty:               "AutoIncrementProperty",
+	KindCollateProperty:                     "CollateProperty",
+	KindDefinerProperty:                     "DefinerProperty",
+	KindEngineProperty:                      "EngineProperty",
+	KindInheritsProperty:                    "InheritsProperty",
+	KindLikeProperty:                        "LikeProperty",
+	KindLockProperty:                        "LockProperty",
+	KindLockingProperty:                     "LockingProperty",
+	KindMaterializedProperty:                "MaterializedProperty",
+	KindNoPrimaryIndexProperty:              "NoPrimaryIndexProperty",
+	KindOnCommitProperty:                    "OnCommitProperty",
+	KindPartitionedByProperty:               "PartitionedByProperty",
+	KindPartitionByRangeProperty:            "PartitionByRangeProperty",
+	KindPartitionByListProperty:             "PartitionByListProperty",
+	KindPartitionList:                       "PartitionList",
+	KindPartitionBoundSpec:                  "PartitionBoundSpec",
+	KindPartitionedOfProperty:               "PartitionedOfProperty",
+	KindSchemaCommentProperty:               "SchemaCommentProperty",
+	KindSqlReadWriteProperty:                "SqlReadWriteProperty",
+	KindTemporaryProperty:                   "TemporaryProperty",
+	KindUnloggedProperty:                    "UnloggedProperty",
+	KindWithDataProperty:                    "WithDataProperty",
+	KindPartitionRange:                      "PartitionRange",
+	KindAnalyzeHistogram:                    "AnalyzeHistogram",
+	KindAnalyzeWith:                         "AnalyzeWith",
+	KindUsingData:                           "UsingData",
+	KindCompressColumnConstraint:            "CompressColumnConstraint",
+	KindDateFormatColumnConstraint:          "DateFormatColumnConstraint",
+	KindExcludeColumnConstraint:             "ExcludeColumnConstraint",
+	KindInlineLengthColumnConstraint:        "InlineLengthColumnConstraint",
+	KindTitleColumnConstraint:               "TitleColumnConstraint",
+	KindUppercaseColumnConstraint:           "UppercaseColumnConstraint",
+	KindWithOperator:                        "WithOperator",
+	KindInOutColumnConstraint:               "InOutColumnConstraint",
 }
 
 // varLenArgs is the authoritative is_var_len_args=True set (mirroring the upstream Func

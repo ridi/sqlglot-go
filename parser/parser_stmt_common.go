@@ -39,13 +39,32 @@ func (p *Parser) parsePartition() exp.Expression {
 	}), nil, nil)
 }
 
-// parseProperties is a minimal stub for _parse_properties (parser.py:2879-2893): the full
-// property-list parser (WITH (...), ENGINE=..., etc.) is deferred (ROADMAP 1d), so this
-// always reports "no properties" and family parsers that call it (e.g. ANALYZE's trailing
-// properties) simply never see one, which is harmless for this slice's corpus - none of
-// its identity cases carry a property list where this stub is consulted.
+// parseProperties ports _parse_properties (parser.py:2879-2894). Property parsers have a
+// singleton return contract in Go, so the few upstream entries which return a list use a
+// temporary Properties wrapper; flattening it here preserves upstream's final AST shape.
 func (p *Parser) parseProperties(before ...bool) exp.Expression {
-	return nil
+	parseBefore := len(before) > 0 && before[0]
+	properties := []exp.Expression{}
+	for {
+		var property exp.Expression
+		if parseBefore {
+			property = p.parsePropertyBefore()
+		} else {
+			property = p.parseProperty()
+		}
+		if property == nil {
+			break
+		}
+		if property.Kind() == exp.KindProperties {
+			properties = append(properties, property.Expressions()...)
+		} else {
+			properties = append(properties, property)
+		}
+	}
+	if len(properties) == 0 {
+		return nil
+	}
+	return p.expression(exp.Properties(exp.Args{"expressions": properties}), nil, nil)
 }
 
 // wordTrieNode is a node in a trie keyed by whole (uppercased) words - one dispatch-map

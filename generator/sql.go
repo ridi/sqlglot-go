@@ -1546,29 +1546,97 @@ func (g *Generator) returningSQL(e expressions.Expression) string {
 
 func (g *Generator) createSQL(e expressions.Expression) string {
 	kind := g.sqlKey(e, "kind")
-	// ddl cluster addition (generator.py:1306-1313): a CONSTRAINT TRIGGER (the
-	// `CREATE CONSTRAINT TRIGGER ...` postgres form) is stored with kind="TRIGGER" plus a
-	// TriggerProperties.constraint=true marker (parser/parser_ddl.go's trigger branch), and
-	// only re-adds the "CONSTRAINT " prefix here at generation time.
-	if kind == "TRIGGER" {
-		if props := asExpression(e.Arg("properties")); props != nil {
-			if exprs := listFromValue(props.Arg("expressions")); len(exprs) > 0 {
-				if first := asExpression(exprs[0]); first != nil && first.Kind() == expressions.KindTriggerProperties && boolValue(first.Arg("constraint")) {
-					kind = "CONSTRAINT " + kind
-				}
+	properties := asExpression(e.Arg("properties"))
+
+	// generator.py:1306-1313: a CONSTRAINT TRIGGER stores the modifier on the first
+	// TriggerProperties node and restores it in front of the creatable kind here.
+	if kind == "TRIGGER" && properties != nil {
+		if propertyExpressions := properties.Expressions(); len(propertyExpressions) > 0 {
+			first := propertyExpressions[0]
+			if first.Kind() == expressions.KindTriggerProperties && boolValue(first.Arg("constraint")) {
+				kind = "CONSTRAINT " + kind
 			}
 		}
 	}
+
+	propertyLocations := map[propertyLocation][]expressions.Expression{}
+	if properties != nil {
+		propertyLocations = g.locateProperties(properties)
+	}
 	this := g.sqlKey(e, "this")
+
+	propertiesSQL := ""
+	postSchema := propertyLocations[propertyLocationPostSchema]
+	postWith := propertyLocations[propertyLocationPostWith]
+	if len(postSchema) > 0 || len(postWith) > 0 {
+		combined := make([]expressions.Expression, 0, len(postSchema)+len(postWith))
+		combined = append(combined, postSchema...)
+		combined = append(combined, postWith...)
+		propertiesSQL = g.gen(g.propertiesExpression(combined, e))
+		if len(postSchema) > 0 {
+			propertiesSQL = g.sep() + propertiesSQL
+		} else if !g.pretty {
+			propertiesSQL = " " + propertiesSQL
+		}
+	}
+
+	begin := ""
+	if boolValue(e.Arg("begin")) {
+		begin = " BEGIN"
+	}
+	expressionSQL := g.sqlKey(e, "expression")
+	if expressionSQL != "" {
+		expressionSQL = begin + g.sep() + expressionSQL
+		postAliasSQL := g.renderProperties(
+			g.propertiesExpression(propertyLocations[propertyLocationPostAlias], e),
+			"", ", ", "", false,
+		)
+		if postAliasSQL != "" {
+			postAliasSQL = " " + postAliasSQL
+		}
+		expressionSQL = " AS" + postAliasSQL + expressionSQL
+	}
+
+	postIndexSQL := g.renderProperties(
+		g.propertiesExpression(propertyLocations[propertyLocationPostIndex], e),
+		" ", ", ", "", false,
+	)
+	indexes := g.expressions(exprsOptions{expression: e, key: "indexes", noIndent: true, sep: " "})
+	if indexes != "" {
+		indexes = " " + indexes
+	}
+	indexSQL := indexes + postIndexSQL
+
+	clustered := ""
+	if clusteredArg := e.Arg("clustered"); clusteredArg != nil {
+		if boolValue(clusteredArg) {
+			clustered = " CLUSTERED COLUMNSTORE"
+		} else {
+			clustered = " NONCLUSTERED COLUMNSTORE"
+		}
+	}
 	replace := ""
 	if boolValue(e.Arg("replace")) {
 		replace = " OR REPLACE"
+	}
+	refresh := ""
+	if boolValue(e.Arg("refresh")) {
+		refresh = " OR REFRESH"
 	}
 	unique := ""
 	if boolValue(e.Arg("unique")) {
 		unique = " UNIQUE"
 	}
-	modifiers := replace + unique
+	postCreateSQL := g.renderProperties(
+		g.propertiesExpression(propertyLocations[propertyLocationPostCreate], e),
+		" ", " ", "", false,
+	)
+	modifiers := clustered + replace + refresh + unique + postCreateSQL
+
+	postExpressionSQL := g.renderProperties(
+		g.propertiesExpression(propertyLocations[propertyLocationPostExpression], e),
+		" ", " ", "", false,
+	)
 	concurrently := ""
 	if boolValue(e.Arg("concurrently")) {
 		concurrently = " CONCURRENTLY"
@@ -1577,27 +1645,16 @@ func (g *Generator) createSQL(e expressions.Expression) string {
 	if boolValue(e.Arg("exists")) {
 		exists = " IF NOT EXISTS"
 	}
-	begin := ""
-	if boolValue(e.Arg("begin")) {
-		begin = " BEGIN"
-	}
-	// ddl cluster addition: root_properties placement (generator.py:1319-1336). This port's
-	// property set is entirely POST_SCHEMA (or, for CREATE TRIGGER, POST_EXPRESSION with an
-	// always-empty expression - see generator/ddl_nodes.go propertiesSQL's doc comment), so
-	// it always renders immediately after `this` and before " AS <expression>".
-	propertiesSQL := g.sqlKey(e, "properties")
-	if propertiesSQL != "" {
-		propertiesSQL = " " + propertiesSQL
-	}
-	expressionSQL := g.sqlKey(e, "expression")
-	if expressionSQL != "" {
-		expressionSQL = " AS" + begin + g.sep() + expressionSQL
+	noSchemaBinding := ""
+	if boolValue(e.Arg("no_schema_binding")) {
+		noSchemaBinding = " WITH NO SCHEMA BINDING"
 	}
 	clone := g.sqlKey(e, "clone")
 	if clone != "" {
 		clone = " " + clone
 	}
-	sql := "CREATE" + modifiers + " " + kind + concurrently + exists + " " + this + propertiesSQL + expressionSQL + clone
+
+	sql := "CREATE" + modifiers + " " + kind + concurrently + exists + " " + this + propertiesSQL + expressionSQL + postExpressionSQL + indexSQL + noSchemaBinding + clone
 	return g.prependCtes(e, sql)
 }
 
@@ -1620,7 +1677,35 @@ func (g *Generator) schemaColumnsSQL(e expressions.Expression) string {
 func (g *Generator) columnDefSQL(e expressions.Expression) string {
 	column := g.sqlKey(e, "this")
 	kind := g.sqlKey(e, "kind")
-	constraints := g.expressions(exprsOptions{expression: e, key: "constraints", sep: " ", flat: true})
+
+	// Postgres places a function parameter mode (IN/OUT/INOUT/VARIADIC) BEFORE the
+	// parameter name and omits it from the trailing constraints
+	// (generators/postgres.py:409-419). Unlike upstream, which pop()s the constraint,
+	// we render around it so Generate() stays side-effect free.
+	modePrefix := ""
+	if g.dialect.Name == "postgres" {
+		for _, item := range listFromValue(e.Arg("constraints")) {
+			if c, ok := item.(expressions.Expression); ok && c != nil && c.Kind() == expressions.KindInOutColumnConstraint {
+				modePrefix = g.gen(c) + " "
+				break
+			}
+		}
+	}
+
+	var constraints string
+	if modePrefix != "" {
+		parts := make([]string, 0)
+		for _, item := range listFromValue(e.Arg("constraints")) {
+			c, ok := item.(expressions.Expression)
+			if !ok || c == nil || c.Kind() == expressions.KindInOutColumnConstraint {
+				continue
+			}
+			parts = append(parts, g.gen(c))
+		}
+		constraints = strings.Join(parts, " ")
+	} else {
+		constraints = g.expressions(exprsOptions{expression: e, key: "constraints", sep: " ", flat: true})
+	}
 	exists := ""
 	if boolValue(e.Arg("exists")) {
 		exists = "IF NOT EXISTS "
@@ -1640,7 +1725,7 @@ func (g *Generator) columnDefSQL(e expressions.Expression) string {
 		kind = ""
 	}
 
-	return exists + column + kind + constraints + position
+	return modePrefix + exists + column + kind + constraints + position
 }
 
 func (g *Generator) commandSQL(e expressions.Expression) string {

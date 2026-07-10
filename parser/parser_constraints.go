@@ -18,14 +18,11 @@ import (
 // init() aren't subject to that analysis, so the map contents are built there instead.
 var (
 	// constraintParsers/mysqlConstraintParsers port CONSTRAINT_PARSERS (parser.py:1343-1406)
-	// + parsers/mysql.py:243-251. Only the keys actually reachable from the base/mysql/
-	// postgres corpus are ported: AUTOINCREMENT/AUTO_INCREMENT, CASESPECIFIC, CHARACTER SET,
-	// CHECK, COLLATE, COMMENT, DEFAULT, FOREIGN KEY, GENERATED, IDENTITY, NOT, NULL, ON,
-	// PATH, PRIMARY KEY, REFERENCES, UNIQUE, +mysql's FULLTEXT/INDEX/KEY/SPATIAL/ZEROFILL/INVISIBLE.
-	// The remaining upstream base keys (COMPRESS/CLUSTERED/NONCLUSTERED/ENCODE/EPHEMERAL/
-	// EXCLUDE/FORMAT/INLINE/LIKE/PERIOD/TITLE/TTL/UPPERCASE/WITH/BUCKET/TRUNCATE) are
-	// exotic dialect-specific properties absent from that corpus and are omitted (documented
-	// 1:1 divergence, mirroring the pattern already used for e.g. SET_PARSERS' MySQL-only keys).
+	// + parsers/mysql.py:243-251. The base registry includes the column/schema constraints
+	// needed by the fidelity corpus, including COMPRESS/EXCLUDE/FORMAT/INLINE/LIKE/TITLE/
+	// UPPERCASE; mysql extends it with FULLTEXT/INDEX/KEY/SPATIAL/ZEROFILL/INVISIBLE.
+	// The remaining upstream base keys (CLUSTERED/NONCLUSTERED/ENCODE/EPHEMERAL/PERIOD/TTL/
+	// WITH/BUCKET/TRUNCATE) stay deferred.
 	constraintParsers      map[string]func(*Parser) exp.Expression
 	constraintParserKeySet map[string]bool
 
@@ -34,9 +31,8 @@ var (
 
 	// schemaUnnamedConstraints/mysqlSchemaUnnamedConstraints port the base subset of
 	// SCHEMA_UNNAMED_CONSTRAINTS (parser.py:1458-1468) that this port has parsers for
-	// (CHECK/FOREIGN KEY/PRIMARY KEY/UNIQUE - EXCLUDE/LIKE/PERIOD/BUCKET/TRUNCATE are
-	// omitted, matching constraintParsers' divergence above), plus mysql's FULLTEXT/INDEX/
-	// KEY/SPATIAL (parsers/mysql.py:265-271).
+	// (CHECK/EXCLUDE/FOREIGN KEY/LIKE/PRIMARY KEY/UNIQUE), plus mysql's FULLTEXT/INDEX/
+	// KEY/SPATIAL (parsers/mysql.py:265-271). PERIOD/BUCKET/TRUNCATE stay deferred.
 	schemaUnnamedConstraints      map[string]bool
 	mysqlSchemaUnnamedConstraints map[string]bool
 )
@@ -62,6 +58,7 @@ func init() {
 		"COMMENT": func(p *Parser) exp.Expression {
 			return p.expression(exp.CommentColumnConstraint(exp.Args{"this": p.parseString()}), nil, nil)
 		},
+		"COMPRESS": func(p *Parser) exp.Expression { return p.parseCompress() },
 		"DEFAULT": func(p *Parser) exp.Expression {
 			// A bare CURRENT_TIMESTAMP-family default value (e.g. mysql's `DEFAULT
 			// CURRENT_TIMESTAMP`) needs the small local NO_PAREN_FUNCTIONS workaround below
@@ -74,10 +71,18 @@ func init() {
 			}
 			return p.expression(exp.DefaultColumnConstraint(exp.Args{"this": this}), nil, nil)
 		},
+		"EXCLUDE": func(p *Parser) exp.Expression {
+			return p.expression(exp.ExcludeColumnConstraint(exp.Args{"this": p.parseIndexParams()}), nil, nil)
+		},
 		"FOREIGN KEY": func(p *Parser) exp.Expression { return p.parseForeignKey() },
-		"GENERATED":   func(p *Parser) exp.Expression { return p.parseGeneratedAsIdentity() },
-		"IDENTITY":    func(p *Parser) exp.Expression { return p.parseAutoIncrement() },
-		"NOT":         func(p *Parser) exp.Expression { return p.parseNotConstraint() },
+		"FORMAT": func(p *Parser) exp.Expression {
+			return p.expression(exp.DateFormatColumnConstraint(exp.Args{"this": p.parseVarOrString(false)}), nil, nil)
+		},
+		"GENERATED": func(p *Parser) exp.Expression { return p.parseGeneratedAsIdentity() },
+		"IDENTITY":  func(p *Parser) exp.Expression { return p.parseAutoIncrement() },
+		"INLINE":    func(p *Parser) exp.Expression { return p.parseInline() },
+		"LIKE":      func(p *Parser) exp.Expression { return p.parseCreateLike() },
+		"NOT":       func(p *Parser) exp.Expression { return p.parseNotConstraint() },
 		"NULL": func(p *Parser) exp.Expression {
 			return p.expression(exp.NotNullColumnConstraint(exp.Args{"allow_null": true}), nil, nil)
 		},
@@ -119,13 +124,21 @@ func init() {
 		},
 		"PRIMARY KEY": func(p *Parser) exp.Expression { return p.parsePrimaryKey(false, false) },
 		"REFERENCES":  func(p *Parser) exp.Expression { return p.parseReferences(false) },
-		"UNIQUE":      func(p *Parser) exp.Expression { return p.parseUnique() },
+		"TITLE": func(p *Parser) exp.Expression {
+			return p.expression(exp.TitleColumnConstraint(exp.Args{"this": p.parseVarOrString(false)}), nil, nil)
+		},
+		"UNIQUE": func(p *Parser) exp.Expression { return p.parseUnique() },
+		"UPPERCASE": func(p *Parser) exp.Expression {
+			return p.expression(exp.UppercaseColumnConstraint(nil), nil, nil)
+		},
 	}
 	constraintParserKeySet = funcMapKeys(constraintParsers)
 
 	schemaUnnamedConstraints = map[string]bool{
 		"CHECK":       true,
+		"EXCLUDE":     true,
 		"FOREIGN KEY": true,
+		"LIKE":        true,
 		"PRIMARY KEY": true,
 		"UNIQUE":      true,
 	}
@@ -236,6 +249,23 @@ func (p *Parser) parseCheckConstraint() exp.Expression {
 		"this":     p.parseWrapped(p.parseAssignment, false),
 		"enforced": p.matchTextSeq("ENFORCED"),
 	}), nil, nil)
+}
+
+// parseCompress ports _parse_compress (parser.py:7366-7372): COMPRESS accepts either a
+// scalar bitwise expression or a parenthesized CSV list.
+func (p *Parser) parseCompress() exp.Expression {
+	if p.match(tokens.L_PAREN, false) {
+		return p.expression(exp.CompressColumnConstraint(exp.Args{
+			"this": p.parseWrappedCsv(p.parseBitwise),
+		}), nil, nil)
+	}
+	return p.expression(exp.CompressColumnConstraint(exp.Args{"this": p.parseBitwise()}), nil, nil)
+}
+
+// parseInline ports _parse_inline (parser.py:7427-7429).
+func (p *Parser) parseInline() exp.Expression {
+	p.matchTextSeq("LENGTH")
+	return p.expression(exp.InlineLengthColumnConstraint(exp.Args{"this": p.parseBitwise()}), nil, nil)
 }
 
 // parseGeneratedAsIdentityBase ports the base _parse_generated_as_identity
@@ -358,7 +388,10 @@ func (p *Parser) parseUnique() exp.Expression {
 	// USING ...` clause shape.
 	nulls := p.matchTextSeq("NULLS", "NOT", "DISTINCT")
 	this := p.parseSchema(p.parseUniqueKey())
-	var indexType any
+	// Upstream: index_type=self._match(USING) and self._advance_any() and self._prev.text.
+	// The `and` chain yields the bool False (not None) when USING is absent, which
+	// repr()/ToS() renders as index_type=False; default to false to match.
+	var indexType any = false
 	if p.match(tokens.USING) {
 		if tok := p.advanceAny(false); tok != nil {
 			indexType = tok.Text
@@ -582,16 +615,9 @@ func (p *Parser) parseNumber() exp.Expression {
 }
 
 // parseIndexParams ports _parse_index_params (parser.py:4573-4604): the trailing index-
-// parameter block on a PRIMARY KEY's INCLUDE (...) clause, and - via the ddl cluster's
-// CREATE INDEX support (parser_ddl.go) - a full `USING <method>(<columns>) ... WHERE
-// <predicate>` index definition. Like upstream it always returns an exp.IndexParameters node
-// - empty when no clause follows, which renders as "". The `with_storage` branch
-// (parser.py:4583, _parse_wrapped_properties) is omitted: it's only reachable via
-// exp.ExcludeColumnConstraint (not ported in this slice) or a genuine `WITH (...)`
-// storage-parameter clause on CREATE INDEX (absent from the base/mysql/postgres corpus -
-// documented 1:1 divergence). All the ported sub-parsers guard on their leading keyword, so
-// calling this after every PRIMARY KEY (as parsePrimaryKey does, mirroring parser.py:7650)
-// still consumes nothing when absent.
+// parameter block shared by PRIMARY KEY, CREATE INDEX, and EXCLUDE. Like upstream it always
+// returns an IndexParameters node (empty when no clause follows), and parses storage properties
+// between PARTITION BY and USING INDEX TABLESPACE.
 func (p *Parser) parseIndexParams() exp.Expression {
 	var using exp.Expression
 	if p.match(tokens.USING) {
@@ -606,6 +632,10 @@ func (p *Parser) parseIndexParams() exp.Expression {
 		include = p.parseWrappedIdVars()
 	}
 	partitionBy := p.parsePartitionBy()
+	var withStorage any = false
+	if p.match(tokens.WITH) {
+		withStorage = p.parseWrappedProperties()
+	}
 	var tablespace exp.Expression
 	if p.matchTextSeq("USING", "INDEX", "TABLESPACE") {
 		tablespace = p.parseVar(true, nil, false)
@@ -620,8 +650,9 @@ func (p *Parser) parseIndexParams() exp.Expression {
 		"columns":      columns,
 		"include":      include,
 		"partition_by": partitionBy,
-		"tablespace":   tablespace,
 		"where":        where,
+		"with_storage": withStorage,
+		"tablespace":   tablespace,
 		"on":           on,
 	}), nil, nil)
 }
@@ -637,13 +668,18 @@ func (p *Parser) parseIndexedColumn() exp.Expression {
 	return p.parseOrdered(p.parseOpclass)
 }
 
-// parseWithOperator ports _parse_with_operator (parser.py:9520-9528) minus its trailing
-// `WITH <op>` branch (-> exp.WithOperator): that form (e.g. `col1 WITH &&`) is only
-// reachable via the EXCLUDE constraint, not ported in this slice (documented divergence - a
-// bare `WITH` after an index column is simply left unconsumed, degrading the enclosing
-// CREATE to a Command rather than building a structured WithOperator).
+// parseWithOperator ports _parse_with_operator (parser.py:9520-9528). The operator parser
+// explicitly accepts reserved operator tokens (`=`, `>=`, `&&`, `||`, `@>`, `<@`, etc.) while
+// preserving the indexed column's opclass, ordering, and null-order modifiers.
 func (p *Parser) parseWithOperator() exp.Expression {
-	return p.parseIndexedColumn()
+	this := p.parseIndexedColumn()
+	if !p.match(tokens.WITH) {
+		return this
+	}
+	return p.expression(exp.WithOperator(exp.Args{
+		"this": this,
+		"op":   p.parseVar(true, reservedTokens, false),
+	}), nil, nil)
 }
 
 // parseOpclass ports _parse_opclass (parser.py:4562-4571): disambiguates a plain ordered

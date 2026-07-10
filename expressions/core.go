@@ -432,6 +432,13 @@ func (n *Node) IsLeaf() bool {
 			if len(v) > 0 {
 				return false
 			}
+		case []string:
+			// Upstream is_leaf (core.py:988) treats ANY non-empty list as making
+			// a node non-leaf (`type(v) is list`), including a list of strings
+			// (e.g. AnalyzeWith.expressions). Without this, such nodes inline in ToS().
+			if len(v) > 0 {
+				return false
+			}
 		}
 	}
 	return true
@@ -1138,6 +1145,10 @@ func isEmptyList(value any) bool {
 		return len(v) == 0
 	case []any:
 		return len(v) == 0
+	case []string:
+		// Upstream _to_s filters `v != []` for every list type; an empty list of
+		// strings (e.g. an unset UniqueColumnConstraint.options) must be dropped too.
+		return len(v) == 0
 	}
 	return false
 }
@@ -1226,6 +1237,17 @@ func toSAny(node any, verbose bool, level int, reprStr bool) string {
 			return "True"
 		}
 		return "False"
+	case DType:
+		// Upstream stores DataType.this as the DType enum, whose str() is
+		// "DType.<MEMBER_NAME>" (Enum default). ToS()/repr() renders that verbatim,
+		// so a bare Go string("INT") must become "DType.INT". The enum member NAME
+		// (not its value) is used: USERDEFINED is the sole member whose value
+		// ("USER-DEFINED") differs from its name in v30.12.0.
+		name := string(v)
+		if v == DTypeUserDefined {
+			name = "USERDEFINED"
+		}
+		return "DType." + name
 	case nil:
 		return "None"
 	}

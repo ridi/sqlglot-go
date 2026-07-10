@@ -189,15 +189,21 @@ func (p *Parser) parseOnConflict() exp.Expression {
 	}), nil, nil)
 }
 
+// parseExists ports _parse_exists (parser.py). Upstream's implementation is a
+// short-circuiting `and` chain over _match calls, so it returns the bool False
+// (never None) when the IF [NOT] EXISTS sequence is absent. Mirroring that here —
+// returning false rather than nil — is what makes downstream nodes (Alter, Drop,
+// Insert, Truncate, ColumnDef, ...) carry the explicit exists=False that repr()/ToS()
+// expects. Callers that need a presence test must use a truthy check, not `!= nil`.
 func (p *Parser) parseExists(not_ bool) any {
 	if !p.matchTextSeq("IF") {
-		return nil
+		return false
 	}
 	if not_ && !p.match(tokens.NOT) {
-		return nil
+		return false
 	}
 	if !p.match(tokens.EXISTS) {
-		return nil
+		return false
 	}
 	return true
 }

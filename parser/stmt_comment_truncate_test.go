@@ -71,19 +71,39 @@ func TestParseCommentStructured(t *testing.T) {
 	}
 }
 
-// TestParseCommentCommandDegrade covers _parse_comment inputs this slice doesn't
-// structurally port: COMMENT ON FUNCTION/PROCEDURE, whose target needs the unported
-// _parse_user_defined_function (parser.py:2205-2206). Each degrades to a raw exp.Command
-// that round-trips the original source text byte-identically (testdata/parity_gaps.txt).
-func TestParseCommentCommandDegrade(t *testing.T) {
+// TestParseCommentProcedure ports _parse_comment's FUNCTION/PROCEDURE target branch
+// through _parse_user_defined_function (parser.py:2203-2205).
+func TestParseCommentProcedure(t *testing.T) {
 	sql := "COMMENT ON PROCEDURE my_proc(integer, integer) IS 'Runs a report'"
 	comment := parseOne(t, sql)
-	if comment.Kind() != exp.KindCommand {
-		t.Fatalf("%q: kind = %v, want Command:\n%s", sql, comment.Kind(), comment.ToS())
+	if comment.Kind() != exp.KindComment || comment.Text("kind") != "PROCEDURE" || comment.Arg("exists") != false {
+		t.Fatalf("%q: comment kind/existence mismatch:\n%s", sql, comment.ToS())
 	}
-	if this := comment.Arg("this"); this != "COMMENT" {
-		t.Fatalf("%q: command.this = %#v, want \"COMMENT\":\n%s", sql, this, comment.ToS())
+
+	udf := exprArg(t, comment, "this")
+	if udf.Kind() != exp.KindUserDefinedFunction || udf.Arg("wrapped") != true {
+		t.Fatalf("%q: target should be a wrapped UserDefinedFunction:\n%s", sql, comment.ToS())
 	}
+	name := exprArg(t, udf, "this")
+	if name.Kind() != exp.KindTable || name.Name() != "my_proc" {
+		t.Fatalf("%q: procedure name mismatch:\n%s", sql, comment.ToS())
+	}
+	parameters := expressionsForArg(udf, "expressions")
+	if len(parameters) != 2 {
+		t.Fatalf("%q: parameters = %#v, want two typed parameters:\n%s", sql, udf.Arg("expressions"), comment.ToS())
+	}
+	for i, parameter := range parameters {
+		if parameter.Kind() != exp.KindIdentifier || parameter.Name() != "integer" {
+			t.Fatalf("%q: parameter %d mismatch:\n%s", sql, i, comment.ToS())
+		}
+	}
+	if body := exprArg(t, comment, "expression"); body.Kind() != exp.KindLiteral || body.Text("this") != "Runs a report" {
+		t.Fatalf("%q: comment body mismatch:\n%s", sql, comment.ToS())
+	}
+	if commands := comment.FindAll(exp.KindCommand); len(commands) != 0 {
+		t.Fatalf("%q: found %d Command descendants:\n%s", sql, len(commands), comment.ToS())
+	}
+
 	got, err := generateSQL(t, comment, "")
 	if err != nil {
 		t.Fatalf("Generate: %v", err)

@@ -9,29 +9,38 @@ var rParenCommaSet = map[tokens.TokenType]bool{tokens.R_PAREN: true, tokens.COMM
 
 func (p *Parser) parseCreate() exp.Expression {
 	start := p.prev
-	// Attempt a structured CREATE under error isolation, then degrade to a raw Command
-	// whenever it can't be parsed cleanly: an unsupported creatable (FUNCTION/INDEX/...),
-	// a deferred column constraint or property (1c), or trailing junk after the body.
-	// tryParse runs the body at IMMEDIATE error level, so a partial parse (e.g.
-	// parseSchema/matchRParen hitting an unparsed `NOT NULL`) panics-and-retreats instead
-	// of leaving a stale "Expecting )" that would later poison checkErrors. This keeps the
-	// documented graceful degradation (plan §5 Q#1) clean.
+	// Attempt a structured CREATE under error isolation, then degrade to a raw Command when
+	// an unported creatable/property or trailing token prevents a clean parse. tryParse runs
+	// the body at IMMEDIATE error level so a partial parse retreats without leaving stale
+	// errors that would later poison checkErrors.
 	if structured := p.tryParse(func() exp.Expression { return p.parseCreateStructured(start) }, false); structured != nil {
 		return structured
 	}
 	return p.parseAsCommand(start)
 }
 
-// parseCreateStructured parses a CREATE into an exp.Create, or returns nil (signalling the
-// caller to degrade to a Command) when the statement isn't a structured creatable we
-// support or carries trailing tokens we don't yet parse. Under tryParse it may also raise
-// on a malformed/deferred body, which tryParse converts to nil.
+// parseCreateStructured ports the base/mysql/postgres-relevant control flow of _parse_create
+// (parser.py:2360-2644). Each property pass is appended in upstream order so location-aware
+// generation can place the resulting nodes around the schema, AS alias, expression, and indexes.
 func (p *Parser) parseCreateStructured(start tokens.Token) exp.Expression {
 	replace := start.TokenType == tokens.REPLACE || p.matchPair(tokens.OR, tokens.REPLACE, true) || p.matchPair(tokens.OR, tokens.ALTER, true)
 	refresh := p.matchPair(tokens.OR, tokens.REFRESH, true)
 	unique := p.match(tokens.UNIQUE)
+
+	properties := []exp.Expression{}
+	extendProperties := func(parsed exp.Expression) {
+		if parsed != nil {
+			properties = append(properties, parsed.Expressions()...)
+		}
+	}
+
 	if !p.matchSet(creatables) {
-		return nil
+		// exp.Properties.Location.POST_CREATE
+		parsed := p.parseProperties()
+		extendProperties(parsed)
+		if parsed == nil || !p.matchSet(creatables) {
+			return nil
+		}
 	}
 	createToken := p.prev
 	ctt := createToken.TokenType
@@ -40,28 +49,15 @@ func (p *Parser) parseCreateStructured(start tokens.Token) exp.Expression {
 
 	var this exp.Expression
 	var expression exp.Expression
+	var indexes []exp.Expression
 	var noSchemaBinding any
 	var begin any
-	var properties []exp.Expression
 
 	switch {
-	case dbCreatables[ctt]:
-		tableParts := p.parseTableParts(true, ctt == tokens.SCHEMA, false, false)
-		p.match(tokens.COMMA)
-		this = p.parseSchema(tableParts)
-		// exp.Properties.Location.POST_SCHEMA/POST_WITH (parser.py:2444): the table-tail
-		// property list, e.g. mysql's `DEFAULT CHARSET=utf8 ROW_FORMAT=DYNAMIC`.
-		properties = append(properties, p.parseTailProperties()...)
-		hasAlias := p.match(tokens.ALIAS)
-		expression = p.parseDDLSelect()
-		if expression == nil && hasAlias {
-			expression = p.tryParse(func() exp.Expression { return p.parseTableParts(false, false, false, false) }, false)
-		}
-		if ctt == tokens.VIEW && p.matchTextSeq("WITH", "NO", "SCHEMA", "BINDING") {
-			noSchemaBinding = true
-		}
 	case ctt == tokens.FUNCTION || ctt == tokens.PROCEDURE:
-		this, expression, properties, begin = p.parseCreateFunction(ctt)
+		var functionProperties []exp.Expression
+		this, expression, functionProperties, begin = p.parseCreateFunction(ctt)
+		properties = append(properties, functionProperties...)
 	case ctt == tokens.INDEX:
 		var index exp.Expression
 		anonymous := false
@@ -79,18 +75,78 @@ func (p *Parser) parseCreateStructured(start tokens.Token) exp.Expression {
 		if isConstraint {
 			createToken = p.prev
 		}
-		var triggerProps exp.Expression
-		this, triggerProps = p.parseCreateTrigger(isConstraint)
+		var triggerProperties exp.Expression
+		this, triggerProperties = p.parseCreateTrigger(isConstraint)
 		if this == nil {
 			return nil
 		}
-		properties = append(properties, triggerProps)
+		if triggerProperties != nil {
+			properties = append(properties, triggerProperties)
+		}
+	case ctt == tokens.TYPE:
+		this = p.parseTableParts(true, false, false, false)
+		if this == nil || !p.match(tokens.ALIAS) {
+			return nil
+		}
+		if p.match(tokens.ENUM) {
+			expression = p.expression(exp.DataType(exp.Args{
+				"this":        exp.DTypeEnum,
+				"expressions": p.parseWrappedCsv(p.parseString),
+			}), nil, nil)
+		} else if p.match(tokens.L_PAREN, false) {
+			expression = p.parseSchema(nil)
+		} else {
+			return nil
+		}
+	case dbCreatables[ctt]:
+		tableParts := p.parseTableParts(true, ctt == tokens.SCHEMA, false, false)
+
+		// exp.Properties.Location.POST_NAME
+		p.match(tokens.COMMA)
+		extendProperties(p.parseProperties(true))
+
+		this = p.parseSchema(tableParts)
+
+		// exp.Properties.Location.POST_SCHEMA and POST_WITH
+		extendProperties(p.parseProperties())
+
+		hasAlias := p.match(tokens.ALIAS)
+		if !p.matchSet(selectStartTokens, false) {
+			// exp.Properties.Location.POST_ALIAS
+			extendProperties(p.parseProperties())
+		}
+
+		expression = p.parseDDLSelect()
+		if expression == nil && hasAlias {
+			expression = p.tryParse(func() exp.Expression { return p.parseTableParts(false, false, false, false) }, false)
+		}
+
+		if ctt == tokens.TABLE {
+			// exp.Properties.Location.POST_EXPRESSION
+			extendProperties(p.parseProperties())
+
+			indexes = []exp.Expression{}
+			for {
+				index := p.parseIndex()
+
+				// exp.Properties.Location.POST_INDEX
+				extendProperties(p.parseProperties())
+				if index == nil {
+					break
+				}
+				p.match(tokens.COMMA)
+				indexes = append(indexes, index)
+			}
+		} else if ctt == tokens.VIEW && p.matchTextSeq("WITH", "NO", "SCHEMA", "BINDING") {
+			noSchemaBinding = true
+		}
 	default:
 		return nil
 	}
 	if p.curr.IsValid() && !p.matchSet(rParenCommaSet, false) {
 		return nil
 	}
+
 	kind := stringsUpper(createToken.Text)
 	var propertiesNode exp.Expression
 	if len(properties) > 0 {
@@ -105,6 +161,7 @@ func (p *Parser) parseCreateStructured(start tokens.Token) exp.Expression {
 		"expression":        expression,
 		"exists":            exists,
 		"properties":        propertiesNode,
+		"indexes":           indexes,
 		"no_schema_binding": noSchemaBinding,
 		"concurrently":      concurrently,
 		"begin":             begin,
@@ -123,18 +180,64 @@ func (p *Parser) parseUserDefinedFunction() exp.Expression {
 	return p.expression(exp.UserDefinedFunction(exp.Args{"this": this, "expressions": expressions, "wrapped": true}), nil, nil)
 }
 
-// parseFunctionParameter ports the base _parse_function_parameter (parser.py:7111-7112):
-// `<id> <type> [constraints...]`. Postgres's own override (parsers/postgres.py:275-292)
-// additionally disambiguates a leading IN/OUT/INOUT/VARIADIC parameter-mode keyword via a
-// two-token type-lookahead (-> exp.InOutColumnConstraint); that disambiguation isn't ported
-// (documented divergence). It's still safe to skip: since this base path's parseIdVar
-// (any_token=true) greedily consumes the mode keyword itself as the parameter's `this`,
-// leaving its real name/type unconsumed, parseUserDefinedFunction's matchRParen fails (or,
-// for the sole "MODE TYPE" two-token shape, happens to render byte-identically regardless of
-// which interpretation is taken) - either way the CREATE degrades to a Command exactly as it
-// did before this cluster existed, so no in-scope corpus case regresses.
+var postgresArgModeTokens = map[tokens.TokenType]bool{
+	tokens.IN: true, tokens.OUT: true, tokens.INOUT: true, tokens.VARIADIC: true,
+}
+
+// parsePostgresParameterMode ports PostgresParser._parse_parameter_mode
+// (parsers/postgres.py:207-255), including both speculative type lookaheads which distinguish
+// a parameter named `out` from an OUT-mode parameter.
+func (p *Parser) parsePostgresParameterMode() (tokens.TokenType, bool) {
+	if !p.matchSet(postgresArgModeTokens, false) || !p.next.IsValid() {
+		return tokens.SENTINEL, false
+	}
+	mode := p.curr.TokenType
+
+	isFollowedByBuiltinType := p.tryParse(func() exp.Expression {
+		p.advance()
+		return p.parseTypes(false, false, false, false)
+	}, true)
+	if isFollowedByBuiltinType != nil {
+		return tokens.SENTINEL, false
+	}
+	if !idVarTokens[p.next.TokenType] {
+		return tokens.SENTINEL, false
+	}
+
+	isFollowedByAnyType := p.tryParse(func() exp.Expression {
+		p.advance(2)
+		return p.parseTypes(false, false, true, false)
+	}, true)
+	if isFollowedByAnyType != nil {
+		return mode, true
+	}
+	return tokens.SENTINEL, false
+}
+
+// parseFunctionParameter ports the base _parse_function_parameter and PostgreSQL's override
+// (parsers/postgres.py:275-292). Mode constraints are raw InOutColumnConstraint children,
+// prepended directly to ColumnDef.constraints just as upstream does.
 func (p *Parser) parseFunctionParameter() exp.Expression {
-	return p.parseColumnDef(p.parseIdVar(true, nil))
+	if p.dialect.Name != "postgres" {
+		return p.parseColumnDef(p.parseIdVar(true, nil))
+	}
+
+	mode, hasMode := p.parsePostgresParameterMode()
+	if hasMode {
+		p.advance()
+	}
+	columnDef := p.parseColumnDef(p.parseIdVar(true, nil))
+	if hasMode && columnDef != nil {
+		constraint := p.expression(exp.InOutColumnConstraint(exp.Args{
+			"input_":   mode == tokens.IN || mode == tokens.INOUT,
+			"output":   mode == tokens.OUT || mode == tokens.INOUT,
+			"variadic": mode == tokens.VARIADIC,
+		}), nil, nil)
+		constraints, _ := columnDef.Arg("constraints").([]exp.Expression)
+		constraints = append([]exp.Expression{constraint}, constraints...)
+		columnDef.Set("constraints", constraints)
+	}
+	return columnDef
 }
 
 // parseCreateFunction ports the CREATE FUNCTION/PROCEDURE branch of _parse_create
@@ -142,9 +245,15 @@ func (p *Parser) parseFunctionParameter() exp.Expression {
 // before and after the body), and the body itself (a string literal, a nested statement, or
 // - left unsupported, see parseUserDefinedFunction - a heredoc/BEGIN block).
 func (p *Parser) parseCreateFunction(ctt tokens.TokenType) (this, expression exp.Expression, properties []exp.Expression, begin any) {
+	extendProperties := func(parsed exp.Expression) {
+		if parsed != nil {
+			properties = append(properties, parsed.Expressions()...)
+		}
+	}
+
 	this = p.parseUserDefinedFunction()
 	// exp.Properties.Location.POST_SCHEMA (parser.py:2417): properties parsed before AS.
-	properties = append(properties, p.parseTailProperties()...)
+	extendProperties(p.parseProperties())
 
 	// _parse_heredoc (parser.py:9368-9370) only matches TokenType.HEREDOC_STRING - a
 	// dollar-quoted UDF body (e.g. postgres `AS $$ ... $$`), which this port doesn't model
@@ -165,8 +274,8 @@ func (p *Parser) parseCreateFunction(ctt tokens.TokenType) (this, expression exp
 	// when the parsed body is immediately followed by `, (`, which never occurs in this
 	// port's corpus. Omitted (documented divergence; see parser_ddl_tail_test.go).
 
-	// exp.Properties.Location.POST_SCHEMA (parser.py:2445): properties parsed after AS/the
-	// overload attempt (e.g. mysql's LANGUAGE/SQL SECURITY tail when there's no AS at all).
+	// exp.Properties.Location.POST_SCHEMA (parser.py:2445): function properties parsed after
+	// AS/the overload attempt, without the generic key=value fallback.
 	properties = append(properties, p.parseTailProperties()...)
 
 	if p.match(tokens.COMMAND) {
@@ -177,10 +286,9 @@ func (p *Parser) parseCreateFunction(ctt tokens.TokenType) (this, expression exp
 	returnMatched := p.matchTextSeq("RETURN")
 	if p.match(tokens.STRING, false) {
 		expression = p.parseString()
-		// exp.Properties.Location.POST_SCHEMA (parser.py:2450): properties parsed after a
-		// string-literal body, e.g. postgres's trailing LANGUAGE/IMMUTABLE/CALLED ON NULL
-		// INPUT.
-		properties = append(properties, p.parseTailProperties()...)
+		// exp.Properties.Location.POST_SCHEMA (parser.py:2458): generic properties parsed
+		// after a string-literal body.
+		extendProperties(p.parseProperties())
 	} else if ctt == tokens.FUNCTION {
 		// _parse_user_defined_function_expression (parser.py:7108-7109) is just
 		// self._parse_statement(); exp.Block (the PROCEDURE body fallback, parser.py:2462)
@@ -195,10 +303,8 @@ func (p *Parser) parseCreateFunction(ctt tokens.TokenType) (this, expression exp
 	return this, expression, properties, begin
 }
 
-// parseIndexBody ports the `if index or anonymous:` half of _parse_index
-// (parser.py:4606-4634) - the only half reachable from CREATE INDEX (the other half, used
-// only by a bare _parse_index() call from CREATE TABLE's own post-schema index-collection
-// loop, isn't ported: this slice doesn't populate exp.Create's "indexes" list).
+// parseIndexBody ports the named/anonymous CREATE INDEX branch of _parse_index
+// (parser.py:4606-4634).
 func (p *Parser) parseIndexBody(index exp.Expression, anonymous bool) exp.Expression {
 	p.match(tokens.ON)
 	p.match(tokens.TABLE) // hive
@@ -206,6 +312,22 @@ func (p *Parser) parseIndexBody(index exp.Expression, anonymous bool) exp.Expres
 	params := p.parseIndexParams()
 	return p.expression(exp.Index(exp.Args{
 		"this": index, "table": table, "params": params,
+	}), nil, nil)
+}
+
+// parseIndex ports the no-argument branch of _parse_index, used by CREATE TABLE's trailing
+// UNIQUE/PRIMARY/AMP INDEX loop.
+func (p *Parser) parseIndex() exp.Expression {
+	unique := p.match(tokens.UNIQUE)
+	primary := p.matchTextSeq("PRIMARY")
+	amp := p.matchTextSeq("AMP")
+	if !p.match(tokens.INDEX) {
+		return nil
+	}
+	index := p.parseIdVar(true, nil)
+	return p.expression(exp.Index(exp.Args{
+		"this": index, "unique": unique, "primary": primary, "amp": amp,
+		"params": p.parseIndexParams(),
 	}), nil, nil)
 }
 
@@ -563,52 +685,147 @@ func (p *Parser) parseDDLSelect() exp.Expression {
 
 // propertyParserFunc mirrors one PROPERTY_PARSERS entry (parser.py:1227-1341): `default`
 // carries the `_match(DEFAULT) and ...` prefix upstream passes as a `default=True` kwarg
-// (only the CHARACTER SET/CHARSET entries consult it - parser.py:1239-1240).
+// (CHARACTER SET/CHARSET and COLLATE consult it in the ported subset).
 type propertyParserFunc func(p *Parser, isDefault bool) exp.Expression
 
-// propertyParsers/postgresPropertyParsers are a restricted PROPERTY_PARSERS
-// (parser.py:1227-1341): only the keys needed to close this slice's DDL-tail parity gaps
-// (RETURNS/LANGUAGE/SECURITY/SQL SECURITY/CALLED/STRICT/IMMUTABLE/STABLE/DETERMINISTIC/
-// CHARSET/CHARACTER SET/ROW_FORMAT, +postgres's SET override). The remaining ~90 upstream
-// entries (ENGINE/AUTO_INCREMENT/COLLATE/COMMENT/PARTITION BY/WITH/TBLPROPERTIES/... and
-// every dialect-specific storage/model property) are exotic and out of scope for this port
-// (documented divergence, mirroring constraintParsers' analogous omission list in
-// parser_constraints.go); a property list this restricted parser can't recognize simply
-// stops - it never consumes a token it shouldn't, so an unsupported trailing property always
-// degrades the enclosing CREATE to a Command exactly as it did before this cluster existed.
+// propertyParsers contains the shared PROPERTY_PARSERS entries required by the CREATE
+// fidelity worklist. It intentionally remains a subset of upstream's 80+ registry: an
+// unported dialect-specific property is left unconsumed so the enclosing statement fails
+// closed to Command. MySQL overrides LOCK and PARTITION BY; Postgres overrides SET.
 var (
 	propertyParsers         map[string]propertyParserFunc
 	propertyParserKeySet    map[string]bool
+	mysqlPropertyParsers    map[string]propertyParserFunc
+	mysqlPropertyKeySet     map[string]bool
 	postgresPropertyParsers map[string]propertyParserFunc
 	postgresPropertyKeySet  map[string]bool
 )
 
 func init() {
 	propertyParsers = map[string]propertyParserFunc{
-		"RETURNS": func(p *Parser, _ bool) exp.Expression { return p.parseReturnsProperty() },
+		"ALGORITHM": func(p *Parser, _ bool) exp.Expression {
+			return p.parsePropertyAssignment(func(this exp.Expression) exp.Expression {
+				return p.expression(exp.AlgorithmProperty(exp.Args{"this": this}), nil, nil)
+			})
+		},
+		"AUTO_INCREMENT": func(p *Parser, _ bool) exp.Expression {
+			return p.parsePropertyAssignment(func(this exp.Expression) exp.Expression {
+				return p.expression(exp.AutoIncrementProperty(exp.Args{"this": this}), nil, nil)
+			})
+		},
+		"CALLED": func(p *Parser, _ bool) exp.Expression { return p.parseCalledOnNullInputProperty() },
+		"CHARSET": func(p *Parser, isDefault bool) exp.Expression {
+			return p.parseCharacterSet(isDefault)
+		},
+		"CHARACTER SET": func(p *Parser, isDefault bool) exp.Expression {
+			return p.parseCharacterSet(isDefault)
+		},
+		"COLLATE": func(p *Parser, isDefault bool) exp.Expression {
+			return p.parsePropertyAssignment(func(this exp.Expression) exp.Expression {
+				// Upstream builds CollateProperty via _parse_property_assignment(**kwargs);
+				// the `default` kwarg is present only when a leading DEFAULT set it True
+				// (parser.py:2799-2800). Omit it otherwise to match repr()/ToS() exactly,
+				// unlike CharacterSetProperty whose parser always records default.
+				args := exp.Args{"this": this}
+				if isDefault {
+					args["default"] = true
+				}
+				return p.expression(exp.CollateProperty(args), nil, nil)
+			})
+		},
+		"COMMENT": func(p *Parser, _ bool) exp.Expression {
+			return p.parsePropertyAssignment(func(this exp.Expression) exp.Expression {
+				return p.expression(exp.SchemaCommentProperty(exp.Args{"this": this}), nil, nil)
+			})
+		},
+		"CONTAINS": func(p *Parser, _ bool) exp.Expression { return p.parseContainsProperty() },
+		"DEFINER":  func(p *Parser, _ bool) exp.Expression { return p.parseDefiner() },
+		"DETERMINISTIC": func(p *Parser, _ bool) exp.Expression {
+			return p.parseStabilityProperty("IMMUTABLE")
+		},
+		"ENGINE": func(p *Parser, _ bool) exp.Expression {
+			return p.parsePropertyAssignment(func(this exp.Expression) exp.Expression {
+				return p.expression(exp.EngineProperty(exp.Args{"this": this}), nil, nil)
+			})
+		},
+		"FORMAT": func(p *Parser, _ bool) exp.Expression {
+			return p.parsePropertyAssignment(func(this exp.Expression) exp.Expression {
+				return p.expression(exp.FileFormatProperty(exp.Args{"this": this}), nil, nil)
+			})
+		},
+		"IMMUTABLE": func(p *Parser, _ bool) exp.Expression { return p.parseStabilityProperty("IMMUTABLE") },
+		"INHERITS": func(p *Parser, _ bool) exp.Expression {
+			return p.expression(exp.InheritsProperty(exp.Args{
+				"expressions": p.parseWrappedCsv(func() exp.Expression {
+					return p.parseTable(false, false, nil, false, false, false, false)
+				}),
+			}), nil, nil)
+		},
 		"LANGUAGE": func(p *Parser, _ bool) exp.Expression {
 			return p.parsePropertyAssignment(func(this exp.Expression) exp.Expression {
 				return p.expression(exp.LanguageProperty(exp.Args{"this": this}), nil, nil)
 			})
 		},
-		"SECURITY":     func(p *Parser, _ bool) exp.Expression { return p.parseSQLSecurity() },
-		"SQL SECURITY": func(p *Parser, _ bool) exp.Expression { return p.parseSQLSecurity() },
-		"CALLED":       func(p *Parser, _ bool) exp.Expression { return p.parseCalledOnNullInputProperty() },
-		"STRICT": func(p *Parser, _ bool) exp.Expression {
-			return p.expression(exp.StrictProperty(nil), nil, nil)
+		"LIKE":    func(p *Parser, _ bool) exp.Expression { return p.parseCreateLike() },
+		"LOCK":    func(p *Parser, _ bool) exp.Expression { return p.parseLocking() },
+		"LOCKING": func(p *Parser, _ bool) exp.Expression { return p.parseLocking() },
+		"MATERIALIZED": func(p *Parser, _ bool) exp.Expression {
+			return p.expression(exp.MaterializedProperty(nil), nil, nil)
 		},
-		"IMMUTABLE":     func(p *Parser, _ bool) exp.Expression { return p.parseStabilityProperty("IMMUTABLE") },
-		"STABLE":        func(p *Parser, _ bool) exp.Expression { return p.parseStabilityProperty("STABLE") },
-		"DETERMINISTIC": func(p *Parser, _ bool) exp.Expression { return p.parseStabilityProperty("IMMUTABLE") },
-		"CHARSET":       func(p *Parser, isDefault bool) exp.Expression { return p.parseCharacterSet(isDefault) },
-		"CHARACTER SET": func(p *Parser, isDefault bool) exp.Expression { return p.parseCharacterSet(isDefault) },
+		"MODIFIES": func(p *Parser, _ bool) exp.Expression { return p.parseModifiesProperty() },
+		"NO":       func(p *Parser, _ bool) exp.Expression { return p.parseNoProperty() },
+		"ON":       func(p *Parser, _ bool) exp.Expression { return p.parseOnProperty() },
+		"PARTITION": func(p *Parser, _ bool) exp.Expression {
+			return p.parsePartitionedOf()
+		},
+		"PARTITION BY": func(p *Parser, _ bool) exp.Expression {
+			return p.parsePartitionedBy()
+		},
+		"PARTITIONED BY": func(p *Parser, _ bool) exp.Expression {
+			return p.parsePartitionedBy()
+		},
+		"PARTITIONED_BY": func(p *Parser, _ bool) exp.Expression {
+			return p.parsePartitionedBy()
+		},
+		"READS":   func(p *Parser, _ bool) exp.Expression { return p.parseReadsProperty() },
+		"RETURNS": func(p *Parser, _ bool) exp.Expression { return p.parseReturnsProperty() },
 		"ROW_FORMAT": func(p *Parser, _ bool) exp.Expression {
 			return p.parsePropertyAssignment(func(this exp.Expression) exp.Expression {
 				return p.expression(exp.RowFormatProperty(exp.Args{"this": this}), nil, nil)
 			})
 		},
+		"SECURITY":     func(p *Parser, _ bool) exp.Expression { return p.parseSQLSecurity() },
+		"SQL SECURITY": func(p *Parser, _ bool) exp.Expression { return p.parseSQLSecurity() },
+		"STABLE":       func(p *Parser, _ bool) exp.Expression { return p.parseStabilityProperty("STABLE") },
+		"STRICT": func(p *Parser, _ bool) exp.Expression {
+			return p.expression(exp.StrictProperty(nil), nil, nil)
+		},
+		"TEMP": func(p *Parser, _ bool) exp.Expression {
+			return p.expression(exp.TemporaryProperty(nil), nil, nil)
+		},
+		"TEMPORARY": func(p *Parser, _ bool) exp.Expression {
+			return p.expression(exp.TemporaryProperty(nil), nil, nil)
+		},
+		"UNLOGGED": func(p *Parser, _ bool) exp.Expression {
+			return p.expression(exp.UnloggedProperty(nil), nil, nil)
+		},
+		"WITH": func(p *Parser, _ bool) exp.Expression { return p.parseWithProperty() },
 	}
 	propertyParserKeySet = funcMapKeys2(propertyParsers)
+
+	mysqlPropertyParsers = make(map[string]propertyParserFunc, len(propertyParsers))
+	for k, v := range propertyParsers {
+		mysqlPropertyParsers[k] = v
+	}
+	mysqlPropertyParsers["LOCK"] = func(p *Parser, _ bool) exp.Expression {
+		return p.parsePropertyAssignment(func(this exp.Expression) exp.Expression {
+			return p.expression(exp.LockProperty(exp.Args{"this": this}), nil, nil)
+		})
+	}
+	mysqlPropertyParsers["PARTITION BY"] = func(p *Parser, _ bool) exp.Expression {
+		return p.parseMySQLPartitionProperty()
+	}
+	mysqlPropertyKeySet = funcMapKeys2(mysqlPropertyParsers)
 
 	// postgresPropertyParsers ports parsers/postgres.py:89-91 PostgresParser.PROPERTY_PARSERS:
 	// `**parser.Parser.PROPERTY_PARSERS` (minus INPUT, not ported anyway) plus a "SET"
@@ -643,23 +860,29 @@ func funcMapKeys2(m map[string]propertyParserFunc) map[string]bool {
 }
 
 func (p *Parser) propertyParsersFor() map[string]propertyParserFunc {
-	if p.dialect.Name == "postgres" {
+	switch p.dialect.Name {
+	case "mysql":
+		return mysqlPropertyParsers
+	case "postgres":
 		return postgresPropertyParsers
+	default:
+		return propertyParsers
 	}
-	return propertyParsers
 }
 
 func (p *Parser) propertyParserKeys() map[string]bool {
-	if p.dialect.Name == "postgres" {
+	switch p.dialect.Name {
+	case "mysql":
+		return mysqlPropertyKeySet
+	case "postgres":
 		return postgresPropertyKeySet
+	default:
+		return propertyParserKeySet
 	}
-	return propertyParserKeySet
 }
 
-// parseTailProperty ports _parse_property (parser.py:2793-2811) minus its generic key=value
-// fallback (_parse_key_value_property) and sequence-properties branch: neither is reachable
-// through this restricted propertyParsers set, so a non-matching leading token simply yields
-// nil (mirrors _parse_function_properties' analogous restriction, parser.py:7091-7095).
+// parseTailProperty is the singleton adapter for _parse_function_properties
+// (parser.py:7091-7106), intentionally omitting the generic key=value fallback after AS.
 func (p *Parser) parseTailProperty() exp.Expression {
 	if p.matchTexts(p.propertyParserKeys()) {
 		return p.propertyParsersFor()[stringsUpper(p.prev.Text)](p, false)
@@ -670,18 +893,20 @@ func (p *Parser) parseTailProperty() exp.Expression {
 	return nil
 }
 
-// parseTailProperties ports _parse_properties (parser.py:2767-2781) with `before` always false
-// (the `before=True` POST_NAME variant, teradata-only, is out of scope). Returns the raw
-// property list rather than wrapping it in exp.Properties, so callers can accumulate
-// multiple passes (before/after AS, ...) before building one Properties node.
+// parseTailProperties ports _parse_function_properties (parser.py:7091-7106). It returns
+// the raw list so CREATE FUNCTION can merge its successive property passes in order.
 func (p *Parser) parseTailProperties() []exp.Expression {
 	var properties []exp.Expression
 	for {
-		prop := p.parseTailProperty()
-		if prop == nil {
+		property := p.parseTailProperty()
+		if property == nil {
 			break
 		}
-		properties = append(properties, prop)
+		if property.Kind() == exp.KindProperties {
+			properties = append(properties, property.Expressions()...)
+		} else {
+			properties = append(properties, property)
+		}
 	}
 	return properties
 }

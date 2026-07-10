@@ -46,12 +46,8 @@ func init() {
 	}
 
 	// mysqlAlterParsers ports parsers/mysql.py:253-258 MySQLParser.ALTER_PARSERS:
-	// `**parser.Parser.ALTER_PARSERS` plus CHANGE/MODIFY. AUTO_INCREMENT (mysql.py:257) is
-	// omitted - it needs exp.AutoIncrementProperty via _parse_property_assignment, a
-	// Property-family node outside this DDL slice's scope; a real occurrence (gap:
-	// `ALTER TABLE t AUTO_INCREMENT=3000000000`) degrades to Command instead (documented
-	// divergence, same pattern as the MySQL ALGORITHM=INPLACE gap on parseProperty).
-	mysqlAlterParsers = make(map[string]func(*Parser) []exp.Expression, len(alterParsers)+2)
+	// `**parser.Parser.ALTER_PARSERS` plus CHANGE/MODIFY/AUTO_INCREMENT.
+	mysqlAlterParsers = make(map[string]func(*Parser) []exp.Expression, len(alterParsers)+3)
 	for k, v := range alterParsers {
 		mysqlAlterParsers[k] = v
 	}
@@ -60,6 +56,11 @@ func init() {
 	}
 	mysqlAlterParsers["MODIFY"] = func(p *Parser) []exp.Expression {
 		return ensureListExpr(p.parseAlterTableModify(false))
+	}
+	mysqlAlterParsers["AUTO_INCREMENT"] = func(p *Parser) []exp.Expression {
+		return ensureListExpr(p.parsePropertyAssignment(func(this exp.Expression) exp.Expression {
+			return p.expression(exp.AutoIncrementProperty(exp.Args{"this": this}), nil, nil)
+		}))
 	}
 
 	mysqlAlterAlterParsers = map[string]func(*Parser) exp.Expression{
@@ -89,27 +90,6 @@ func ensureListExpr(e exp.Expression) []exp.Expression {
 		return []exp.Expression{}
 	}
 	return []exp.Expression{e}
-}
-
-// parseOnProperty is a stub for _parse_on_property (parser.py:3345-3350): upstream builds an
-// exp.OnProperty / exp.OnCommitProperty here (e.g. ClickHouse `ON CLUSTER <name>` for the
-// "cluster" arg, or `DROP INDEX <idx> ON <table>`), but neither Kind is ported (out of the
-// base/mysql/postgres DDL slice scope), so this always returns nil. Both call sites match a
-// bare ON first: parseDrop degrades the statement to a Command when this returns nil (see
-// stmt_drop.go), and parseAlter's action dispatch then fails on the leftover ON target and
-// likewise falls through to parseAsCommand.
-func (p *Parser) parseOnProperty() exp.Expression {
-	return nil
-}
-
-// parseProperty is a minimal stub for _parse_property (parser.py): the single-property
-// parser used by parseAlter's trailing `options=parseCsv(parseProperty)` and
-// parseAddAlteration's ADD PARTITION ... LOCATION clause is deferred - base/postgres carry
-// no trailing property in this slice's corpus, and MySQL's ALGORITHM=/LOCK= trailer stays a
-// documented deferral (gap: `ALTER TABLE t1 ADD COLUMN x INT, ALGORITHM=INPLACE,
-// LOCK=EXCLUSIVE`). Always nil, so parseCsv(parseProperty) yields an empty list.
-func (p *Parser) parseProperty() exp.Expression {
-	return nil
 }
 
 // parseAlter ports _parse_alter (parser.py:8923-8973).
@@ -418,10 +398,8 @@ func (p *Parser) parseAlterTableRename() exp.Expression {
 
 // parseAlterTableSet ports _parse_alter_table_set (parser.py:8875-8909). The
 // STAGE_FILE_FORMAT/STAGE_COPY_OPTIONS branches (Snowflake-only, needing
-// _parse_wrapped_options - not ported anywhere in this codebase) are omitted, matching this
-// slice's documented exotic-keyword-omission pattern; a real occurrence falls through to the
-// trailing "else" branch and degrades gracefully (parseProperties is already a stub, see
-// parser_stmt_common.go).
+// _parse_wrapped_options - not ported anywhere in this codebase) are omitted; unsupported
+// occurrences fall through to the shared property parser and ultimately fail closed.
 func (p *Parser) parseAlterTableSet() exp.Expression {
 	alterSet := p.expression(exp.AlterSet(nil), nil, nil)
 

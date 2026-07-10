@@ -72,18 +72,40 @@ func TestCreateFunctionUnsupportedBodyDegradesToCommand(t *testing.T) {
 	roundTripCase(t, "postgres", sql, sql)
 }
 
-// TestCreateFunctionParameterModesStayCommand guards the documented divergence: postgres
-// IN/OUT/INOUT/VARIADIC parameter-mode disambiguation isn't ported (parseFunctionParameter
-// only implements the base _parse_function_parameter), so those signatures must still
-// degrade gracefully to a Command (an identity round-trip for already-canonical input) rather
-// than mis-parse or panic uncaught.
-func TestCreateFunctionParameterModesStayCommand(t *testing.T) {
-	for _, sql := range []string{
-		"CREATE FUNCTION foo(IN a INT DEFAULT 0, OUT b INT)",
-		"CREATE FUNCTION foo(INOUT a INT)",
-		"CREATE FUNCTION foo(VARIADIC a INT[])",
-	} {
-		roundTripCase(t, "postgres", sql, sql)
+// TestCreateFunctionParameterModes ports PostgresParser's two-lookahead mode
+// disambiguation and raw InOutColumnConstraint attachment.
+func TestCreateFunctionParameterModes(t *testing.T) {
+	create := parseOneDialect(t, "CREATE FUNCTION foo(IN a INT DEFAULT 0, OUT b INT, INOUT c INT, VARIADIC d INT[])", "postgres")
+	if create.Kind() != exp.KindCreate {
+		t.Fatalf("kind = %v, want Create:\n%s", create.Kind(), create.ToS())
+	}
+	parameters := expressionsForArg(exprArg(t, create, "this"), "expressions")
+	if len(parameters) != 4 {
+		t.Fatalf("parameter count = %d, want 4:\n%s", len(parameters), create.ToS())
+	}
+	want := []struct {
+		input, output, variadic bool
+	}{{true, false, false}, {false, true, false}, {true, true, false}, {false, false, true}}
+	for i, parameter := range parameters {
+		constraints := expressionsForArg(parameter, "constraints")
+		if len(constraints) == 0 || constraints[0].Kind() != exp.KindInOutColumnConstraint {
+			t.Fatalf("parameter %d mode constraint mismatch:\n%s", i, create.ToS())
+		}
+		mode := constraints[0]
+		if mode.Arg("input_") != want[i].input || mode.Arg("output") != want[i].output || mode.Arg("variadic") != want[i].variadic {
+			t.Fatalf("parameter %d mode flags mismatch:\n%s", i, create.ToS())
+		}
+	}
+	assertToSContains(t, create,
+		"InOutColumnConstraint(input_=True, output=False, variadic=False)",
+		"InOutColumnConstraint(input_=False, output=False, variadic=True)",
+	)
+
+	// MODE TYPE means the keyword is a parameter name, not a mode.
+	namedOut := parseOneDialect(t, "CREATE FUNCTION foo(out INT)", "postgres")
+	parameter := expressionsForArg(exprArg(t, namedOut, "this"), "expressions")[0]
+	if parameter.Name() != "out" || len(expressionsForArg(parameter, "constraints")) != 0 {
+		t.Fatalf("out identifier disambiguation mismatch:\n%s", namedOut.ToS())
 	}
 }
 
@@ -190,7 +212,3 @@ func TestCreateTableDDLTailGap(t *testing.T) {
 		"CREATE TABLE z (a INT) ENGINE=InnoDB AUTO_INCREMENT=1 CHARACTER SET=utf8 COLLATE=utf8_bin COMMENT='x'",
 		"CREATE TABLE z (a INT) ENGINE=InnoDB AUTO_INCREMENT=1 CHARACTER SET=utf8 COLLATE=utf8_bin COMMENT='x'")
 }
-
-// Regression guard for "this slice's restricted PROPERTY_PARSERS subset didn't widen what
-// CREATE TABLE accepts" is already covered by parser_ddl_test.go's TestParseCreate (the
-// `CREATE TABLE t (a INT) ENGINE=InnoDB` -> Command assertion).
