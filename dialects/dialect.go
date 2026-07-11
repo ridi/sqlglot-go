@@ -800,6 +800,35 @@ func isRelationLevelIdentifier(e exp.Expression) bool {
 	return false
 }
 
+// FoldIdentifierName applies the dialect's normalization strategy to a bare identifier NAME
+// (a plain string with no AST node/parent), returning the folded form. It is the string-level
+// counterpart to NormalizeIdentifier — which derives an identifier's role from its parent — for
+// callers that must fold a detached name (e.g. a catalog/schema key) where no AST context
+// exists. isTable selects the role for the role-aware MySQLCaseSensitiveTableNames strategy
+// (lctn=0): true = a relation-level name (table/db/catalog/alias/CTE) that stays case-sensitive;
+// false = a column-level name that folds. It is ignored by the other strategies.
+//
+// The input is treated as an UNQUOTED name (folding is unconditional): callers pass a name they
+// have already decided is unquoted, matching how schema normalization builds identifiers with
+// quoted=false. A quoted name must not be folded and should not be passed here.
+func (d *Dialect) FoldIdentifierName(name string, isTable bool) string {
+	switch d.NormalizationStrategy {
+	case CaseSensitive:
+		return name
+	case MySQLCaseSensitiveTableNames:
+		if isTable {
+			return name
+		}
+		return MySQLLower(name)
+	case MySQLCaseInsensitive:
+		return MySQLLower(name)
+	case Uppercase, CaseInsensitiveUppercase:
+		return asciiUpper(name)
+	default: // Lowercase, CaseInsensitive
+		return asciiLower(name)
+	}
+}
+
 func (d *Dialect) NormalizeIdentifier(e exp.Expression) exp.Expression {
 	s := d.NormalizationStrategy
 	if e == nil || e.Kind() != exp.KindIdentifier || s == CaseSensitive {
