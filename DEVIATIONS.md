@@ -107,6 +107,17 @@ names are case-insensitive on every platform; database/table names are case-sens
    through a native binding** — one implementation, zero drift — or, failing that, regenerate the same
    table. Never substitute a stdlib case function.
 
+**Caveat — MariaDB CTE names diverge.** These strategies model **MySQL**. Empirically (live probes,
+lctn=0): MySQL 5.7 / 8.0.33 / 8.4 and MariaDB 10.11 / 11.4 all agree that table/db names, column
+qualifiers, and table aliases are case-**sensitive** and column names case-**insensitive** — but MariaDB
+resolves **CTE names case-INSENSITIVELY even at lctn=0**, whereas MySQL treats them case-sensitively
+(`WITH Users AS (…) … FROM users` errors on MySQL, binds on MariaDB). So `MySQLCaseSensitiveTableNames`
+is exact for MySQL but **over-preserves CTE names on MariaDB** (a mixed-case CTE reference vs definition
+would get distinct normalized keys — the same class of mask-miss this strategy otherwise closes, but for
+CTE-derived columns). MariaDB is not a ported dialect; a faithful MariaDB variant would fold
+`TableAlias.this` when it is a CTE name. If you key security off normalized identifiers on **MariaDB**,
+treat CTE-derived columns with care.
+
 **Default is unchanged (faithful to upstream).** MySQL's default `NormalizationStrategy` stays
 `CASE_SENSITIVE` (upstream `mysql.py:25`) — no folding. The two MySQL strategies are **opt-in** via the
 settings string (§1.3). Under the default, MySQL columns are *under-normalized* (`CAFÉ` ≠ `café`) — a
