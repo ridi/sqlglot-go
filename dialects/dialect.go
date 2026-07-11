@@ -595,13 +595,89 @@ func parseNormalizationStrategy(v string) (NormalizationStrategy, error) {
 	}
 }
 
-// GetOrRaise resolves a dialect, optionally with comma-separated settings, mirroring
-// upstream sqlglot's Dialect.get_or_raise string form, e.g.
-// "mysql, normalization_strategy = mysql_case_sensitive_table_names". The bare name (no
-// comma) behaves exactly as before. Each constructor returns a fresh *Dialect, so applying
-// a per-call setting override cannot leak across callers. The only supported setting is
-// normalization_strategy (upstream also has "version", which this port does not model).
-func GetOrRaise(name string) (*Dialect, error) {
+// normalizationStrategyToken is the reverse of parseNormalizationStrategy: it maps a
+// strategy back to the settings-string token GetOrRaise accepts. Used by SettingsString so a
+// typed *Dialect round-trips through the string-based settings resolver.
+func normalizationStrategyToken(s NormalizationStrategy) (string, bool) {
+	switch s {
+	case Lowercase:
+		return "lowercase", true
+	case Uppercase:
+		return "uppercase", true
+	case CaseSensitive:
+		return "case_sensitive", true
+	case CaseInsensitive:
+		return "case_insensitive", true
+	case CaseInsensitiveUppercase:
+		return "case_insensitive_uppercase", true
+	case MySQLCaseInsensitive:
+		return "mysql_case_insensitive", true
+	case MySQLCaseSensitiveTableNames:
+		return "mysql_case_sensitive_table_names", true
+	default:
+		return "", false
+	}
+}
+
+// SettingsString serializes the dialect to the canonical "name, normalization_strategy=..."
+// form that GetOrRaise round-trips. It captures the state that participates in identifier
+// resolution — the dialect name (tokenizer/quoting) and normalization_strategy — which is
+// the complete set of *Dialect state the qualify pipeline consults. Other tweaked fields are
+// not serialized (they don't affect qualify), so a *Dialect handed to CanonicalString is
+// honored for those two facets.
+func (d *Dialect) SettingsString() string {
+	if d == nil {
+		return ""
+	}
+	if token, ok := normalizationStrategyToken(d.NormalizationStrategy); ok {
+		return d.Name + ", normalization_strategy=" + token
+	}
+	return d.Name
+}
+
+// CanonicalString reduces a DialectType-style value (nil | string | *Dialect) to a string the
+// string-based resolvers understand, mirroring upstream sqlglot's polymorphic DialectType at
+// the boundaries that still thread a dialect as a string (schema, identifier parsing).
+func CanonicalString(dialect any) (string, error) {
+	switch v := dialect.(type) {
+	case nil:
+		return "", nil
+	case string:
+		return v, nil
+	case *Dialect:
+		return v.SettingsString(), nil
+	case Dialect:
+		return v.SettingsString(), nil
+	default:
+		return "", fmt.Errorf("invalid dialect %T (want string or *dialects.Dialect)", dialect)
+	}
+}
+
+// GetOrRaise resolves a DialectType-style value to a *Dialect, mirroring upstream sqlglot's
+// Dialect.get_or_raise(DialectType): it accepts nil (base), a string (bare name or the
+// comma-separated settings form, e.g. "mysql, normalization_strategy=mysql_case_insensitive"),
+// or an already-built *Dialect (returned as-is). Each string resolution returns a fresh
+// *Dialect, so a per-call setting override cannot leak across callers. The only supported
+// string setting is normalization_strategy (upstream also has "version", not modeled here).
+func GetOrRaise(dialect any) (*Dialect, error) {
+	switch v := dialect.(type) {
+	case nil:
+		return getOrRaiseString("")
+	case string:
+		return getOrRaiseString(v)
+	case *Dialect:
+		if v == nil {
+			return getOrRaiseString("")
+		}
+		return v, nil
+	case Dialect:
+		return &v, nil
+	default:
+		return nil, fmt.Errorf("invalid dialect %T (want string or *dialects.Dialect)", dialect)
+	}
+}
+
+func getOrRaiseString(name string) (*Dialect, error) {
 	base, rest, hasSettings := strings.Cut(name, ",")
 	d, err := dialectByName(base)
 	if err != nil {

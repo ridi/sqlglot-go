@@ -149,6 +149,15 @@ previously lacked** (a gap from upstream, now closed), not a behavioral divergen
 is unchanged. Only `normalization_strategy` is supported (upstream also has `version`, which this port
 does not model); unknown settings/strategy values error, as upstream.
 
+The dialect-accepting entry points (`dialects.GetOrRaise`, `optimizer.NormalizeIdentifiers`,
+`optimizer.QualifyOpts.Dialect`) now accept a **DialectType-style value** — `nil` | a string (bare name
+or the settings form) | a `*dialects.Dialect` — mirroring upstream's polymorphic `DialectType =
+Union[str, Dialect, Type[Dialect], None]` (`dialect.py:1171`). This *restores* upstream API
+compatibility the earlier string-only port had narrowed. A `*Dialect` is honored for the state qualify
+consults (dialect name + `NormalizationStrategy`); it is reduced to its canonical settings string
+(`(*Dialect).SettingsString()`) at the boundaries that still thread a dialect as a string (schema,
+identifier parsing), which round-trips through `GetOrRaise`.
+
 ### 1.4 MySQL `--` line comment requires a trailing space — *fixes an upstream tokenizer bug*
 
 **What upstream does:** sqlglot's tokenizer treats `--` as a line-comment start unconditionally in every

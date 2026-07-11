@@ -5,7 +5,10 @@ import (
 	exp "github.com/sjincho/sqlglot-go/expressions"
 )
 
-func NormalizeIdentifiers(expression exp.Expression, dialect string) exp.Expression {
+// NormalizeIdentifiers folds unquoted identifiers per the dialect's normalization strategy.
+// dialect is a DialectType-style value (nil | string | *dialects.Dialect), mirroring upstream
+// sqlglot's normalize_identifiers(expression, dialect: DialectType).
+func NormalizeIdentifiers(expression exp.Expression, dialect any) exp.Expression {
 	d, err := dialects.GetOrRaise(dialect)
 	if err != nil {
 		panic(err)
@@ -23,6 +26,12 @@ func NormalizeIdentifiers(expression exp.Expression, dialect string) exp.Express
 	return expression
 }
 
-func NormalizeIdentifiersString(name string, dialect string) exp.Expression {
-	return NormalizeIdentifiers(exp.ParseIdentifier(name, dialect), dialect)
+func NormalizeIdentifiersString(name string, dialect any) exp.Expression {
+	// ParseIdentifier only needs the dialect's tokenizer/quoting (strategy-independent), so
+	// resolve any->name for it; NormalizeIdentifiers still applies the full strategy.
+	d, err := dialects.GetOrRaise(dialect)
+	if err != nil {
+		panic(err)
+	}
+	return NormalizeIdentifiers(exp.ParseIdentifier(name, d.Name), dialect)
 }
