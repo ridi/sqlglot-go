@@ -161,6 +161,27 @@ is two `-` operators (`1--2` == `1 - -2`), matching the real server. Upstream mi
 **DEVIATIONS.md §1.4** (a same-dialect behavioral deviation, same class as the §1.1 ASCII fold), with a
 regression test. Base/Postgres unchanged.
 
+## M1 + P6 — extension mechanism + structural Postgres EXPLAIN — DONE (branch sjincho/parity/extension-mechanism-explain)
+
+**M1 (Class-A divergence mechanism):** `testdata/upstream_extensions.jsonl` ledgers each construct
+sqlglot-go parses structurally that pinned upstream does not; `extension_tripwire_test.go` enforces both
+sides — `TestUpstreamExtensionsGoSide` (always-on: we parse each row to its `go_kind`) and the
+`.reference`-gated `TestUpstreamExtensionsTripwire` (re-asserts pinned upstream still returns
+`command`/`parse_error`, failing at a future reference bump with the row's reconcile note). See AGENTS.md
+"How deviations are tracked" + DEVIATIONS.md "Grammar extensions beyond upstream".
+
+## P6 — structural Postgres EXPLAIN grammar extension — DONE (same branch)
+
+Postgres `EXPLAIN` now builds a `Describe` root with `kind = "EXPLAIN"`, structured `CopyParameter`
+options, a parsed inner statement, and the option-list `wrapped` flag. The Postgres generator preserves
+parenthesized comma-separated and legacy space-separated forms; unsupported forms still fail closed to a
+verbatim `Command`. This is the first extension governed by the `pg-explain` row in
+`testdata/upstream_extensions.jsonl`: pinned v30.12.0 remains `Command`, Go remains `Describe`, and
+`TestUpstreamExtensionsGoSide` plus the `.reference`-gated `TestUpstreamExtensionsTripwire` enforce both
+sides until a future upstream implementation is reconciled. Dedicated AST/round-trip/fallback tests and
+the full build/test/vet/gofmt gate verify the slice. No identity-corpus fixture was added, so the corpus
+floors remain **1847/1847** (base 955/955, MySQL 424/424, Postgres 468/468).
+
 ## Athena support (Presto/Trino/Hive parser chain), scoped to lineage — DONE
 
 **DONE (2026-07, main @ e428a54).** All 4 slices landed + merged, each `go test ./...` green with

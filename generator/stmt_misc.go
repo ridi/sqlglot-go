@@ -40,6 +40,24 @@ func (g *Generator) killSQL(e expressions.Expression) string {
 
 // describeSQL ports describe_sql (generator.py:1499-1508).
 func (g *Generator) describeSQL(e expressions.Expression) string {
+	if g.dialect.Name == "postgres" && e.Text("kind") == "EXPLAIN" {
+		// This ledgered Postgres extension intentionally bypasses FileFormatProperty formatting.
+		wrapped := boolValue(e.Arg("wrapped"))
+		sep := " "
+		if wrapped {
+			sep = ", "
+		}
+		options := g.expressions(exprsOptions{expression: e, flat: true, sep: sep})
+		if options != "" {
+			if wrapped {
+				options = " (" + options + ")"
+			} else {
+				options = " " + options
+			}
+		}
+		return "EXPLAIN" + options + " " + g.sqlKey(e, "this")
+	}
+
 	style := g.sqlKey(e, "style")
 	if style != "" {
 		style = " " + style

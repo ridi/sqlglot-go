@@ -100,6 +100,7 @@ func Postgres() *Dialect {
 		"DECLARE":       tokens.COMMAND,
 		"DO":            tokens.COMMAND,
 		"EXEC":          tokens.COMMAND,
+		"EXPLAIN":       tokens.DESCRIBE, // Ledgered pg-explain: non-COMMAND prevents swallowing remaining SQL as raw text.
 		"HSTORE":        tokens.HSTORE,
 		"INT8":          tokens.BIGINT,
 		"MONEY":         tokens.MONEY,

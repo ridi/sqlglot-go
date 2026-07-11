@@ -184,6 +184,29 @@ over-eagerly comments it out; a consumer that relies on the token stream to dist
 
 ---
 
+## Grammar extensions beyond upstream
+
+Grammar extensions are output-round-tripping AST extensions: they preserve valid same-dialect SQL output
+but intentionally produce a more useful structured AST than pinned upstream. They are governed by the
+extension ledger in [`testdata/upstream_extensions.jsonl`](./testdata/upstream_extensions.jsonl), not by
+the §1 discipline for correctness fixes against real-engine bugs. The always-on
+`TestUpstreamExtensionsGoSide` checks the recorded Go root Kind, and the `.reference`-gated
+`TestUpstreamExtensionsTripwire` re-checks pinned upstream's behavior so a future reference bump cannot
+silently collide with an extension.
+
+The first registered construct is ledger id
+[`pg-explain`](./testdata/upstream_extensions.jsonl). For Postgres, literal `EXPLAIN` tokenizes through the
+`DESCRIBE` statement path and builds a `Describe` root with structured `CopyParameter` option children, a
+parsed inner statement, and an internal `kind = "EXPLAIN"` discriminator. The Postgres generator uses that
+discriminator to render either parenthesized comma-separated options or legacy space-separated options;
+the existing base/MySQL literal `DESCRIBE` generation remains unchanged. Unsupported `EXPLAIN` forms
+fail closed to
+`Command` and round-trip verbatim. Pinned sqlglot v30.12.0 also returns `Command` for the ledgered example;
+use the stable ledger id and tripwire for its reconciliation lifecycle rather than copying the row's
+mutable reconciliation instructions here.
+
+---
+
 ## 2. Cross-dialect-only deviations (never affect same-dialect round-trip)
 
 The port's verified goal is **same-dialect round-trip** (read X → write X). Cross-dialect

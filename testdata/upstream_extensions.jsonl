@@ -1,0 +1,16 @@
+# Grammar extensions beyond upstream (sqlglot v30.12.0) — the Class-A divergence ledger.
+# One JSON object per line. Each row is a construct sqlglot-go parses STRUCTURALLY that pinned
+# upstream does NOT (it falls back to exp.Command or raises). See DEVIATIONS.md "Grammar
+# extensions beyond upstream" and AGENTS.md "How deviations are tracked".
+#
+# Fields:
+#   id        — stable slug
+#   dialect   — "" (base) | "mysql" | "postgres" | ...
+#   sql       — a canonical example
+#   upstream  — pinned-upstream behavior: "command" | "parse_error"
+#   go_kind   — the root Kind class name sqlglot-go parses it to
+#   reconcile — what to do if the pin-tripwire fires (upstream caught up)
+#
+# Enforced by extension_tripwire_test.go: TestUpstreamExtensionsGoSide (we parse it -> go_kind)
+# and TestUpstreamExtensionsTripwire (pinned upstream still does `upstream`; fires at bump time).
+{"id":"pg-explain","dialect":"postgres","sql":"EXPLAIN (ANALYZE, FORMAT JSON) SELECT a FROM t","upstream":"command","go_kind":"Describe","reconcile":"If upstream adds structural Postgres EXPLAIN, adopt its node shape (it will likely reuse exp.Describe) and delete this row + the Postgres EXPLAIN->DESCRIBE tokenizer alias / explain parser."}
