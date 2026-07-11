@@ -79,14 +79,21 @@ names are case-insensitive on every platform; database/table names are case-sens
 1. **Two new `NormalizationStrategy` members** (`dialects/dialect.go`), used only by opt-in (see below):
    - `MySQLCaseInsensitive` — folds **every** identifier (columns and table/db names) with MySQL's map,
      regardless of quoting. Models `lower_case_table_names = 1/2`.
-   - `MySQLCaseSensitiveTableNames` — **role-aware**: database/table name identifiers stay
-     case-sensitive; every other identifier folds. Models `lower_case_table_names = 0` (Linux default).
-     Role is decided by the identifier's parent — case-sensitive **only** for an `exp.Table`'s
-     `this`/`db`/`catalog` child. `Column.table` is *excluded* (it is a table **alias** reference, not a
-     table name, and must fold with the column so a qualified column keeps matching its lowercased
-     source alias). When the parent is absent (a `Copy()`, a schema identifier, or `parse_identifier`),
-     the identifier folds — the safe default for a security-keyed identity (never leaves a
-     would-be-folded name un-folded).
+   - `MySQLCaseSensitiveTableNames` — **role-aware**: relation-level identifiers stay case-sensitive;
+     column-level identifiers fold. Models `lower_case_table_names = 0` (Linux default), where MySQL
+     resolves **table/db names, table aliases, CTE names, and column qualifiers** case-sensitively but
+     **column names** case-insensitively. Role is decided by the identifier's parent + arg key (see
+     `isRelationLevelIdentifier`): **preserved** for an `exp.Table` `this`/`db`/`catalog`, an
+     `exp.Column` `table`/`db`/`catalog` (a *qualifier* — it references a relation/alias), and an
+     `exp.TableAlias` `this` (a table alias or CTE name); **folded** for everything else — an
+     `exp.Column` `this` (the leaf column name), an `exp.TableAlias` `columns` entry (a CTE
+     output-column), an `exp.Alias` `alias` (a column alias), JOIN USING columns, etc. This matches
+     MySQL 8.4 exactly: `SELECT users.rrn FROM Users` errors because the qualifier is case-sensitive,
+     and `WITH Users AS (…) … FROM users` misses the CTE because CTE names are case-sensitive, while
+     column names fold. (Folding `Column.table` — as if a qualifier were column-level — makes a
+     qualified column against an unaliased mixed-case table, or a mixed-case CTE reference, resolve to
+     the wrong relation.) When the parent is absent (a `Copy()`, a schema identifier, or
+     `parse_identifier`), the identifier folds — the standalone-name default.
 
 2. **The MySQL fold algorithm itself** — the exported **`dialects.MySQLLower`**
    (`dialects/mysql_casefold.go`) folds via `mysqlLowerMap`, a byte-exact port of MySQL's `.tolower`
@@ -111,7 +118,7 @@ mask-evasion risk that the opt-in strategy closes. Postgres continues to use the
 | dialect / situation | strategy | why |
 |---|---|---|
 | **PostgreSQL** | default (`LOWERCASE`, ASCII fold — §1.1) | PG folds unquoted names ASCII-only; quoted names stay case-sensitive. Nothing to change. |
-| **MySQL on Linux** (or `lower_case_table_names=0`) | `mysql_case_sensitive_table_names` | Columns are case-insensitive on every platform (fold them); db/table names are case-sensitive on Linux (keep them). Closes the column mask-evasion gap while matching table semantics. |
+| **MySQL on Linux** (or `lower_case_table_names=0`) | `mysql_case_sensitive_table_names` | Column *names* are case-insensitive on every platform (fold them); table/db names, table aliases, CTE names, and column *qualifiers* are case-sensitive on Linux (keep them). Closes the column mask-evasion gap while matching lctn=0 relation resolution exactly. |
 | **MySQL on macOS/Windows** (or `lower_case_table_names=1` or `2`) | `mysql_case_insensitive` | There, db/table names are *also* case-insensitive, so fold everything. |
 | **MySQL, must match upstream sqlglot exactly** (transpile/round-trip, not security keying) | default (`CASE_SENSITIVE`) | Upstream folds nothing for MySQL; keep parity. But be aware columns are under-normalized (`Foo` ≠ `foo`). |
 | **Presto / Trino / Athena / Hive** | default (`CASE_INSENSITIVE`, ASCII fold) | Case-insensitive dialects; folded to lower. (ASCII fold is an approximation of engine-exact folding — see §2.) |

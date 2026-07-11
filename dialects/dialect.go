@@ -687,21 +687,39 @@ func asciiUpper(s string) string {
 	return string(b)
 }
 
-// isTableNameIdentifier reports whether e is a database/table name identifier: a
-// direct this/db/catalog child of an exp.Table. Column.table is deliberately
-// EXCLUDED — it is a table ALIAS reference, not a table name, and must fold with
-// the column so a qualified column keeps matching its lowercased source alias
-// (see DEVIATIONS.md §1.2). A nil parent (Copy()/schema/parse-identifier paths)
-// returns false, so such an identifier folds — the safe default for a normalized
-// security key (never leaves a would-be-folded name un-folded).
-func isTableNameIdentifier(e exp.Expression) bool {
+// isRelationLevelIdentifier reports whether e names or references a table/relation (as opposed to a
+// column). Under MySQL lower_case_table_names=0 (the MySQLCaseSensitiveTableNames strategy) these are
+// case-SENSITIVE and must NOT fold, while column-level identifiers stay case-INSENSITIVE and fold. The
+// relation-level positions are:
+//   - a this/db/catalog child of an exp.Table    — a physical table/db/catalog name
+//   - a table/db/catalog child of an exp.Column  — a column QUALIFIER (it references a relation/alias)
+//   - the this child of an exp.TableAlias        — a table alias OR a CTE name
+//
+// Everything else folds: exp.Column.this (the leaf column name), exp.TableAlias.columns (a CTE
+// output-column list), exp.Alias.alias (a SELECT column alias), JOIN USING columns — all
+// case-insensitive on every MySQL platform. This matches MySQL lctn=0 exactly: `SELECT users.rrn FROM
+// Users` errors because the qualifier is case-sensitive, and `WITH Users AS (…) … FROM users` misses
+// the CTE because CTE/alias names are case-sensitive, while column names fold. A nil parent
+// (Copy()/parse-identifier paths) returns false so a detached identifier folds (the standalone-name
+// default; the NormalizeIdentifiers tree walk always has parents).
+func isRelationLevelIdentifier(e exp.Expression) bool {
 	p := e.Parent()
-	if p == nil || p.Kind() != exp.KindTable {
+	if p == nil {
 		return false
 	}
-	switch e.ArgKey() {
-	case "this", "db", "catalog":
-		return true
+	switch p.Kind() {
+	case exp.KindTable:
+		switch e.ArgKey() {
+		case "this", "db", "catalog":
+			return true
+		}
+	case exp.KindColumn:
+		switch e.ArgKey() {
+		case "table", "db", "catalog":
+			return true
+		}
+	case exp.KindTableAlias:
+		return e.ArgKey() == "this"
 	}
 	return false
 }
@@ -716,8 +734,10 @@ func (d *Dialect) NormalizeIdentifier(e exp.Expression) exp.Expression {
 	// quoting (MySQL identifier case-insensitivity ignores backticks). See DEVIATIONS.md §1.2.
 	switch s {
 	case MySQLCaseSensitiveTableNames:
-		// role-aware: table/db names stay case-sensitive; everything else folds.
-		if !isTableNameIdentifier(e) {
+		// Role-aware (models lctn=0): relation-level identifiers — table/db/catalog names, column
+		// QUALIFIERS, and table-alias/CTE names — stay case-sensitive; column-level identifiers (leaf
+		// column names, CTE output-column lists, column aliases) fold with MySQLLower.
+		if !isRelationLevelIdentifier(e) {
 			this, _ := e.Arg("this").(string)
 			e.Set("this", MySQLLower(this))
 		}
