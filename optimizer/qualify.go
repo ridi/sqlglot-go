@@ -1,12 +1,16 @@
 package optimizer
 
 import (
+	"github.com/sjincho/sqlglot-go/dialects"
 	exp "github.com/sjincho/sqlglot-go/expressions"
 	"github.com/sjincho/sqlglot-go/schema"
 )
 
 type QualifyOpts struct {
-	Dialect                   string
+	// Dialect is a DialectType-style value: nil (base), a string (bare name or the
+	// "name, normalization_strategy=..." settings form), or a *dialects.Dialect. Mirrors
+	// upstream sqlglot's polymorphic dialect argument; DB/Catalog/Schema are likewise any.
+	Dialect                   any
 	DB                        any
 	Catalog                   any
 	Schema                    any
@@ -36,25 +40,33 @@ func DefaultQualifyOpts() QualifyOpts {
 }
 
 func Qualify(expression exp.Expression, opts QualifyOpts) exp.Expression {
-	s, err := schema.EnsureSchema(opts.Schema, opts.Dialect, true)
+	// opts.Dialect is a DialectType-style value (nil | string | *dialects.Dialect). Reduce it
+	// once to the canonical settings string the string-threaded internals accept; a *Dialect's
+	// name + normalization_strategy round-trip through it (see dialects.CanonicalString).
+	dialect, err := dialects.CanonicalString(opts.Dialect)
+	if err != nil {
+		panic(err)
+	}
+
+	s, err := schema.EnsureSchema(opts.Schema, dialect, true)
 	if err != nil {
 		panic(err)
 	}
 
 	// TODO(slice 4c): store_original_column_identifiers needs Node meta.
-	expression = NormalizeIdentifiers(expression, opts.Dialect)
-	expression = QualifyTables(expression, opts.DB, opts.Catalog, opts.Dialect, opts.CanonicalizeTableAliases, opts.OnQualify)
+	expression = NormalizeIdentifiers(expression, dialect)
+	expression = QualifyTables(expression, opts.DB, opts.Catalog, dialect, opts.CanonicalizeTableAliases, opts.OnQualify)
 
 	if opts.IsolateTables {
-		expression = IsolateTableSelects(expression, s, opts.Dialect)
+		expression = IsolateTableSelects(expression, s, dialect)
 	}
 
 	if opts.QualifyColumns {
-		expression = QualifyColumns(expression, s, opts.ExpandAliasRefs, opts.ExpandStars, opts.InferSchema, opts.AllowPartialQualification, opts.Dialect)
+		expression = QualifyColumns(expression, s, opts.ExpandAliasRefs, opts.ExpandStars, opts.InferSchema, opts.AllowPartialQualification, dialect)
 	}
 
 	if opts.QuoteIdentifiers {
-		expression = QuoteIdentifiers(expression, opts.Dialect, opts.Identify)
+		expression = QuoteIdentifiers(expression, dialect, opts.Identify)
 	}
 
 	if opts.ValidateQualifyColumns {
