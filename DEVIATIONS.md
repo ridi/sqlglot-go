@@ -211,6 +211,17 @@ This boundary is security-relevant: guessing a database can bind access analysis
 actual database would not resolve, creating a wrong-ALLOW decision. Leaving the database absent when
 its resolution cannot be proven is the safe result.
 
+**Dimension resolved (schema/db only; catalog is the caller's).** `SearchPath` resolves the **schema/db**
+part of a table name; it never stamps `catalog`. The probe is a two-part `Table{this, db}`, and this
+resolves correctly against a **three-level `catalog.schema.table`** schema too (verified: with a
+`{cat:{schema:{table}}}` mapping, `SELECT * FROM t` under `SearchPath=[schema…]` stamps `db=<schema>` and
+leaves `catalog` unstamped) — `schema.Find` matches a db-qualified probe by schema-level existence, not
+requiring the catalog level, so a depth-3 consumer is **not** silently over-denied. The stamp is a
+schema-level existence superset: a multi-catalog consumer supplies its own `catalog` (via `opts.Catalog`
+or downstream) and performs the full `catalog.schema.table` resolution, which fail-closes if the table
+does not exist in *its* catalog. So the division is: **R1 fixes the schema/db dimension by proven
+schema-existence; the caller fixes and enforces the catalog.**
+
 This is not a parse-grammar construct, so it is neither registered in
 [`testdata/upstream_extensions.jsonl`](./testdata/upstream_extensions.jsonl) nor governed by the
 grammar-extension tripwire.
