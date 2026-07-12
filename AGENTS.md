@@ -35,12 +35,15 @@ ROADMAP.md's known-divergences + resolved-findings ledgers. Two kinds of diverge
   space; upstream mis-tokenizes `1--2`). Discipline: add a **DEVIATIONS §1 entry** + a `divergence` code
   comment citing the real-engine behavior + a test asserting the port matches the **DB** (not upstream). No
   tripwire needed — we *want* to stay diverged; if upstream later fixes it, the test still passes.
-- **Grammar beyond upstream — constructs upstream does not parse.** Permitted, but each must be (a) correct
-  (round-trip + AST-shape asserted) and (b) tracked so an upstream bump can't silently collide. The plan
-  (not yet built — no such construct is ported today) is an **extension ledger** (`testdata/upstream_
-  extensions.jsonl`) listing each construct pinned upstream does *not* parse, plus a `.reference`-gated
-  **pin-tripwire test** that re-asserts upstream's behavior so the next reference bump fails loudly with a
-  reconciliation note. Model each extension on upstream's likely eventual node (reuse a Kind/family).
+- **Grammar beyond upstream — constructs upstream does not parse structurally.** Permitted, but each must
+  be (a) correct (round-trip + AST shape asserted) and (b) tracked so an upstream bump cannot silently
+  collide. Register each construct in **`testdata/upstream_extensions.jsonl`**. The always-on
+  `TestUpstreamExtensionsGoSide` verifies sqlglot-go's recorded root Kind, while the `.reference`-gated
+  `TestUpstreamExtensionsTripwire` re-asserts pinned upstream's recorded fallback/error behavior and fails
+  with the ledger's reconciliation note if upstream catches up. `pg-explain` is the first registered
+  construct: pinned upstream returns `Command`, while sqlglot-go builds a structured `Describe` that
+  round-trips Postgres `EXPLAIN`. Model future extensions on upstream's likely eventual node (reuse a
+  Kind/family).
 
 Do **not** invent a same-dialect deviation for convenience: the default is faithfulness. A deviation needs a
 correctness rationale (matches the DB) or an explicit, tracked feature decision — and a DEVIATIONS entry.

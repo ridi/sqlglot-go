@@ -815,6 +815,11 @@ func init() {
 		FunctionParsers: map[string]parserOverrideFunc{
 			"GROUP_CONCAT": (*Parser).parseGroupConcat,
 		},
+		// mysql-replace divergence from dialects/mysql.py:154: the tokenizer no longer
+		// packs REPLACE as Command, so this override can disambiguate REPLACE(...).
+		StatementParsers: map[tokens.TokenType]parserOverrideFunc{
+			tokens.REPLACE: (*Parser).parseMySQLReplace,
+		},
 		PropertyParsers: map[string]propertyParserFunc{
 			"LOCK": func(p *Parser, _ bool) exp.Expression {
 				return p.parsePropertyAssignment(func(this exp.Expression) exp.Expression {
@@ -830,6 +835,9 @@ func init() {
 	// parsers/postgres.py:89-91 replaces SET with SetConfigProperty(this=_parse_set()).
 	// parseSet intentionally retains upstream's whole-statement Command fallback behavior.
 	registerDialectParserOverrides("postgres", dialectParserOverrideSet{
+		StatementParsers: map[tokens.TokenType]parserOverrideFunc{
+			tokens.DESCRIBE: (*Parser).parsePostgresExplain,
+		},
 		PropertyParsers: map[string]propertyParserFunc{
 			"SET": func(p *Parser, _ bool) exp.Expression {
 				return p.expression(exp.SetConfigProperty(exp.Args{"this": p.parseSet()}), nil, nil)

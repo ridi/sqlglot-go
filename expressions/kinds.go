@@ -818,15 +818,18 @@ var argTypes = map[Kind][]argSpec{
 	KindCoalesce:            {{"this", true}, {"expressions", false}, {"is_nvl", false}, {"is_null", false}},
 	KindGreatest:            {{"this", true}, {"expressions", false}, {"ignore_nulls", true}},
 	KindLeast:               {{"this", true}, {"expressions", false}, {"ignore_nulls", true}},
-	KindInsert:              {{"hint", false}, {"with_", false}, {"is_function", false}, {"this", false}, {"expression", false}, {"conflict", false}, {"returning", false}, {"overwrite", false}, {"exists", false}, {"alternative", false}, {"where", false}, {"ignore", false}, {"by_name", false}, {"stored", false}, {"partition", false}, {"settings", false}, {"source", false}, {"default", false}},
-	KindUpdate:              {{"with_", false}, {"this", false}, {"expressions", false}, {"from_", false}, {"where", false}, {"returning", false}, {"order", false}, {"limit", false}, {"options", false}, {"hint", false}},
-	KindDelete:              {{"with_", false}, {"this", false}, {"using", false}, {"where", false}, {"returning", false}, {"order", false}, {"limit", false}, {"tables", false}, {"cluster", false}, {"hint", false}},
-	KindMerge:               {{"this", true}, {"using", true}, {"on", false}, {"using_cond", false}, {"whens", true}, {"with_", false}, {"returning", false}},
-	KindWhen:                {{"matched", true}, {"source", false}, {"condition", false}, {"then", true}},
-	KindWhens:               {{"expressions", true}},
-	KindOnConflict:          {{"duplicate", false}, {"expressions", false}, {"action", false}, {"conflict_keys", false}, {"index_predicate", false}, {"constraint", false}, {"where", false}},
-	KindReturning:           {{"expressions", true}, {"into", false}},
-	KindInto:                {{"this", false}, {"temporary", false}, {"unlogged", false}, {"bulk_collect", false}, {"expressions", false}},
+	// The pinned .reference/sqlglot-v30.12.0/sqlglot/expressions/dml.py:195-215
+	// Insert has no "replace" arg. The mysql-replace extension appends it so
+	// existing Insert arg ordering stays stable.
+	KindInsert:     {{"hint", false}, {"with_", false}, {"is_function", false}, {"this", false}, {"expression", false}, {"conflict", false}, {"returning", false}, {"overwrite", false}, {"exists", false}, {"alternative", false}, {"where", false}, {"ignore", false}, {"by_name", false}, {"stored", false}, {"partition", false}, {"settings", false}, {"source", false}, {"default", false}, {"replace", false}},
+	KindUpdate:     {{"with_", false}, {"this", false}, {"expressions", false}, {"from_", false}, {"where", false}, {"returning", false}, {"order", false}, {"limit", false}, {"options", false}, {"hint", false}},
+	KindDelete:     {{"with_", false}, {"this", false}, {"using", false}, {"where", false}, {"returning", false}, {"order", false}, {"limit", false}, {"tables", false}, {"cluster", false}, {"hint", false}},
+	KindMerge:      {{"this", true}, {"using", true}, {"on", false}, {"using_cond", false}, {"whens", true}, {"with_", false}, {"returning", false}},
+	KindWhen:       {{"matched", true}, {"source", false}, {"condition", false}, {"then", true}},
+	KindWhens:      {{"expressions", true}},
+	KindOnConflict: {{"duplicate", false}, {"expressions", false}, {"action", false}, {"conflict_keys", false}, {"index_predicate", false}, {"constraint", false}, {"where", false}},
+	KindReturning:  {{"expressions", true}, {"into", false}},
+	KindInto:       {{"this", false}, {"temporary", false}, {"unlogged", false}, {"bulk_collect", false}, {"expressions", false}},
 	// Arg order matches the order _parse_create sets kwargs (parser.py:2627-2643),
 	// which is what upstream repr() reflects (args are dict-insertion-ordered), NOT
 	// the Create.arg_types declaration order (ddl.py:40). with_ is never set by the
@@ -912,7 +915,7 @@ var argTypes = map[Kind][]argSpec{
 	KindShow:           {{"this", true}, {"history", false}, {"terse", false}, {"target", false}, {"offset", false}, {"starts_with", false}, {"limit", false}, {"from_", false}, {"like", false}, {"where", false}, {"db", false}, {"scope", false}, {"scope_kind", false}, {"full", false}, {"mutex", false}, {"query", false}, {"channel", false}, {"global_", false}, {"log", false}, {"position", false}, {"types", false}, {"privileges", false}, {"for_table", false}, {"for_group", false}, {"for_user", false}, {"for_role", false}, {"into_outfile", false}, {"json", false}, {"iceberg", false}},
 	KindUse:            {{"this", false}, {"expressions", false}, {"kind", false}},
 	KindKill:           {{"this", true}, {"kind", false}},
-	KindDescribe:       {{"this", true}, {"style", false}, {"kind", false}, {"properties", false}, {"expressions", false}, {"partition", false}, {"format", false}, {"as_json", false}},
+	KindDescribe:       {{"this", true}, {"style", false}, {"kind", false}, {"properties", false}, {"expressions", false}, {"wrapped", false}, {"partition", false}, {"format", false}, {"as_json", false}},
 	KindLoadData:       {{"this", true}, {"local", false}, {"overwrite", false}, {"temp", false}, {"inpath", false}, {"files", false}, {"partition", false}, {"input_format", false}, {"serde", false}},
 	KindTransaction:    {{"this", false}, {"modes", false}, {"mark", false}},
 	KindCommit:         {{"chain", false}, {"this", false}, {"durability", false}},

@@ -184,6 +184,90 @@ over-eagerly comments it out; a consumer that relies on the token stream to dist
 
 ---
 
+## Opt-in behavioral extensions beyond upstream
+
+### Search-path-aware table qualification
+
+Pinned upstream `qualify_tables` accepts one fixed `db`/`catalog` and stamps those parts without an
+existence check (`.reference/sqlglot-v30.12.0/sqlglot/optimizer/qualify_tables.py:16-23,62-75`). The
+Go-only `optimizer.QualifyOpts.SearchPath` adds a separate, opt-in resolution mode. The mode switch is
+exact: a nil or empty `SearchPath` uses the existing upstream-faithful fixed `DB`/`Catalog` path
+unchanged, so all existing fixture output remains unchanged; only a non-empty `SearchPath` enables the
+extension.
+
+In non-empty mode, candidates are dialect-normalized and checked in order against the supplied schema.
+A candidate database is stamped only when `schema.Find(..., false, false)` returns a mapping for that
+candidate, and the first proven candidate wins. There is no fallback to the fixed `DB`, and no catalog
+is added. If no candidate is proven, the table remains unqualified so downstream policy can fail
+closed. Absent, ambiguous, empty, flat, or otherwise db-incapable schemas therefore produce no stamp.
+Already-qualified tables and CTE references are preserved and are not rewritten.
+
+The lookup requires a schema whose `SupportedTableArgs` includes `db`. An empty schema or a flat,
+table-only mapping is intentionally insufficient because it cannot prove that a table exists in a
+specific database; probing it as though it could would allow a mapping implementation to truncate the
+db-qualified lookup and return an unrelated unscoped table.
+
+This boundary is security-relevant: guessing a database can bind access analysis to a table that the
+actual database would not resolve, creating a wrong-ALLOW decision. Leaving the database absent when
+its resolution cannot be proven is the safe result.
+
+**Dimension resolved (schema/db only; catalog is the caller's).** `SearchPath` resolves the **schema/db**
+part of a table name; it never stamps `catalog`. The probe is a two-part `Table{this, db}`, and this
+resolves correctly against a **three-level `catalog.schema.table`** schema too (verified: with a
+`{cat:{schema:{table}}}` mapping, `SELECT * FROM t` under `SearchPath=[schema…]` stamps `db=<schema>` and
+leaves `catalog` unstamped) — `schema.Find` matches a db-qualified probe by schema-level existence, not
+requiring the catalog level, so a depth-3 consumer is **not** silently over-denied. The stamp is a
+schema-level existence superset: a multi-catalog consumer supplies its own `catalog` (via `opts.Catalog`
+or downstream) and performs the full `catalog.schema.table` resolution, which fail-closes if the table
+does not exist in *its* catalog. So the division is: **R1 fixes the schema/db dimension by proven
+schema-existence; the caller fixes and enforces the catalog.**
+
+This is not a parse-grammar construct, so it is neither registered in
+[`testdata/upstream_extensions.jsonl`](./testdata/upstream_extensions.jsonl) nor governed by the
+grammar-extension tripwire.
+
+---
+
+## Grammar extensions beyond upstream
+
+Grammar extensions are output-round-tripping AST extensions: they preserve valid same-dialect SQL output
+but intentionally produce a more useful structured AST than pinned upstream. They are governed by the
+extension ledger in [`testdata/upstream_extensions.jsonl`](./testdata/upstream_extensions.jsonl), not by
+the §1 discipline for correctness fixes against real-engine bugs. The always-on
+`TestUpstreamExtensionsGoSide` checks the recorded Go root Kind, and the `.reference`-gated
+`TestUpstreamExtensionsTripwire` re-checks pinned upstream's behavior so a future reference bump cannot
+silently collide with an extension.
+
+The first registered construct is ledger id
+[`pg-explain`](./testdata/upstream_extensions.jsonl). For Postgres, literal `EXPLAIN` tokenizes through the
+`DESCRIBE` statement path and builds a `Describe` root with structured `CopyParameter` option children, a
+parsed inner statement, and an internal `kind = "EXPLAIN"` discriminator. The Postgres generator uses that
+discriminator to render either parenthesized comma-separated options or legacy space-separated options;
+the existing base/MySQL literal `DESCRIBE` generation remains unchanged. Unsupported `EXPLAIN` forms
+fail closed to
+`Command` and round-trip verbatim. Pinned sqlglot v30.12.0 also returns `Command` for the ledgered example;
+use the stable ledger id and tripwire for its reconciliation lifecycle rather than copying the row's
+mutable reconciliation instructions here.
+
+Ledger id [`mysql-insert-set`](./testdata/upstream_extensions.jsonl) registers MySQL `INSERT ... SET`,
+which pinned upstream rejects with a parse error. The MySQL parser intentionally normalizes assignments
+such as `INSERT INTO t SET a = 1, b = 2` directly to the existing `Insert` shape whose target is
+`Schema(Table, columns)` and whose source is one-row `Values(Tuple(values))`; it therefore renders as
+`INSERT INTO t (a, b) VALUES (1, 2)`, and that canonical form is idempotent across subsequent
+parse/generate cycles. The extension is MySQL-only. Use the stable ledger id for its reconciliation
+lifecycle.
+
+Ledger id [`mysql-replace`](./testdata/upstream_extensions.jsonl) registers structural MySQL `REPLACE`,
+which pinned upstream packs as a tokenizer-level `Command`. The MySQL tokenizer no longer performs that
+packing, and the parser represents supported statements as `Insert` with the Go-only optional
+`replace = true` marker. Only MySQL generation consults the marker and renders `REPLACE`; unmarked
+`Insert` nodes and other dialects retain their existing behavior. A leading `REPLACE(` retreats to
+ordinary expression parsing to disambiguate function calls from statements, while unsupported or
+partially consumed statement forms fail closed to a source-preserving `Command`. Use the stable ledger
+id for its reconciliation lifecycle.
+
+---
+
 ## 2. Cross-dialect-only deviations (never affect same-dialect round-trip)
 
 The port's verified goal is **same-dialect round-trip** (read X → write X). Cross-dialect
