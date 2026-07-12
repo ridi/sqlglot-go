@@ -217,10 +217,22 @@ func BuildScope(expression exp.Expression) *Scope { return buildScope(expression
 
 func buildScope(expression exp.Expression) *Scope {
 	scopes := traverseScope(expression)
-	if scope, ok := seqGet(scopes, -1); ok {
-		return scope
+	scope, ok := seqGet(scopes, -1)
+	if !ok {
+		return nil
 	}
-	return nil
+	// Complete-or-none for DML roots: _traverseDML OMITS the DML-root scope when the write
+	// source set is incomplete/malformed, leaving only retained CHILD scopes (e.g. a
+	// scalar-subquery scope). The last such child is NOT a scope over the whole statement —
+	// its Sources miss the target + FROM/USING sources — so returning it here would fail open
+	// (a consumer treating a non-nil BuildScope as the statement scope sees a partial source
+	// set). Only return the last scope as the build root when it actually IS the root scope for
+	// this DML statement; otherwise signal "no root scope" with nil. Non-DML roots are
+	// unaffected (a SELECT's last scope is its root scope).
+	if isDMLRootKind(expression.Kind()) && !(isDMLRootScope(scope) && scope.Expression == expression) {
+		return nil
+	}
+	return scope
 }
 
 func _traverseScope(scope *Scope, out *[]*Scope, mode scopeTraversalMode) {
@@ -525,6 +537,25 @@ func configureDMLSourceScope(childScope *Scope, parent *Scope, subquery exp.Expr
 	childScope.canBeCorrelated = false
 }
 
+// dmlRejectNestedJoins fail-closes on a Join node that carries its own `joins` arg (e.g.
+// u.joins=[joinV], joinV.joins=[joinW]) — a shape current parsers do not produce (joins are
+// flattened onto the source's `joins` list). The source walk only recurses join.This(), so such
+// nested joins would be silently missed, emitting a DML-root scope with an incomplete source set
+// (a fail-open). Refuse it instead, so the root is omitted (complete-or-none) rather than partial.
+func dmlRejectNestedJoins(join exp.Expression, location string) *dmlSourceValidationError {
+	nested, err := strictDMLExpressionList(join.Arg("joins"), false, location+".joins")
+	if err != nil {
+		return err
+	}
+	if len(nested) > 0 {
+		return &dmlSourceValidationError{
+			location: location + ".joins",
+			reason:   "joins nested on a Join node are not collected — omitting DML root fail-closed",
+		}
+	}
+	return nil
+}
+
 func collectDMLSourceCandidates(root exp.Expression) ([]dmlSourceCandidate, *dmlSourceValidationError) {
 	candidates := []dmlSourceCandidate{}
 	visited := map[exp.Expression]bool{}
@@ -561,6 +592,9 @@ func collectDMLSourceCandidates(root exp.Expression) ([]dmlSourceCandidate, *dml
 					location: joinLocation,
 					reason:   fmt.Sprintf("expected Join, got %s", exp.ClassName(join.Kind())),
 				}
+			}
+			if err := dmlRejectNestedJoins(join, joinLocation); err != nil {
+				return err
 			}
 			if err := addCandidate(join.This(), joinLocation+".this", false); err != nil {
 				return err
@@ -627,6 +661,9 @@ func collectDMLSourceCandidates(root exp.Expression) ([]dmlSourceCandidate, *dml
 				location: location,
 				reason:   fmt.Sprintf("expected Join, got %s", exp.ClassName(join.Kind())),
 			}
+		}
+		if err := dmlRejectNestedJoins(join, location); err != nil {
+			return nil, err
 		}
 		if err := addCandidate(join.This(), location+".this", false); err != nil {
 			return nil, err
