@@ -853,6 +853,18 @@ func (d *Dialect) NormalizeIdentifier(e exp.Expression) exp.Expression {
 	return e
 }
 
+// IsReservedKeyword reports whether word is a reserved keyword in this dialect — a word that
+// cannot be an unquoted identifier. It is the case-safe accessor for ReservedKeywords (which is
+// stored lowercase-keyed): a consumer folding keyword case must fold ONLY reserved words, since a
+// non-reserved keyword can be a case-sensitive identifier (e.g. on MySQL lower_case_table_names=0).
+// Only MySQL populates a reserved set today; other dialects return false.
+func (d *Dialect) IsReservedKeyword(word string) bool {
+	if d.ReservedKeywords == nil {
+		return false
+	}
+	return d.ReservedKeywords[strings.ToLower(word)]
+}
+
 func (d *Dialect) CaseSensitive(text string) bool {
 	// Strategies that fold every identifier unconditionally never need quoting to
 	// preserve case: nothing is preserved.
