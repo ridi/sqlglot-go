@@ -1,9 +1,67 @@
 package dialects
 
 import (
+	"fmt"
+	"strings"
+
 	exp "github.com/sjincho/sqlglot-go/expressions"
 	"github.com/sjincho/sqlglot-go/tokens"
 )
+
+func parseMySQLVersion(value string) (int, error) {
+	value = strings.TrimSpace(value)
+	invalid := func(reason string) (int, error) {
+		return 0, fmt.Errorf("invalid mysql_version %q: %s", value, reason)
+	}
+	if value == "" {
+		return invalid("expected a decimal major version")
+	}
+
+	maxInt := int(^uint(0) >> 1)
+	parseComponent := func(start int) (component, end int, ok bool) {
+		if start >= len(value) || value[start] < '0' || value[start] > '9' {
+			return 0, start, false
+		}
+		for end = start; end < len(value) && value[end] >= '0' && value[end] <= '9'; end++ {
+			digit := int(value[end] - '0')
+			if component > (maxInt-digit)/10 {
+				return 0, end, false
+			}
+			component = component*10 + digit
+		}
+		return component, end, true
+	}
+
+	major, pos, ok := parseComponent(0)
+	if !ok {
+		return invalid("expected a decimal major version without overflow")
+	}
+	minor, patch := 0, 0
+	if pos < len(value) && value[pos] == '.' {
+		minor, pos, ok = parseComponent(pos + 1)
+		if !ok {
+			return invalid("expected a decimal minor version without overflow")
+		}
+		if minor > 99 {
+			return invalid("minor version must be at most 99")
+		}
+		if pos < len(value) && value[pos] == '.' {
+			patch, _, ok = parseComponent(pos + 1)
+			if !ok {
+				return invalid("expected a decimal patch version without overflow")
+			}
+			if patch > 99 {
+				return invalid("patch version must be at most 99")
+			}
+		}
+	}
+
+	tail := minor*100 + patch
+	if major > (maxInt-tail)/10000 {
+		return invalid("comparable version overflows int")
+	}
+	return major*10000 + tail, nil
+}
 
 func MySQL() *Dialect {
 	d := Base()
@@ -92,6 +150,7 @@ func MySQL() *Dialect {
 	cfg.Quotes["\""] = "\""
 	cfg.Identifiers = map[rune]string{'`': "`"}
 	cfg.Comments["#"] = ""
+	cfg.MySQLExecutableComments = true
 	// MySQL requires `--` to be followed by whitespace/control (or EOF) to start a line
 	// comment; otherwise it is two `-` operators (`1--2` == `1 - -2`). Upstream sqlglot
 	// mis-tokenizes this — see DEVIATIONS §1.4. `#` needs no such guard (`#comment` is a
