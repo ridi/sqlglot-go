@@ -62,7 +62,7 @@ case-folding, to match real engines).
 ## Quick start
 
 ```bash
-go get github.com/sjincho/sqlglot-go
+go get github.com/ridi/sqlglot-go
 ```
 
 ```go
@@ -71,10 +71,10 @@ package main
 import (
 	"fmt"
 
-	sqlglot "github.com/sjincho/sqlglot-go"
-	"github.com/sjincho/sqlglot-go/generator"
-	"github.com/sjincho/sqlglot-go/optimizer"
-	"github.com/sjincho/sqlglot-go/schema"
+	sqlglot "github.com/ridi/sqlglot-go"
+	"github.com/ridi/sqlglot-go/generator"
+	"github.com/ridi/sqlglot-go/optimizer"
+	"github.com/ridi/sqlglot-go/schema"
 )
 
 func main() {
