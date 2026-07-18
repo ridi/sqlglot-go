@@ -9,6 +9,28 @@ import (
 	"github.com/ridi-oss/sqlglot-go/schema"
 )
 
+// normalizeRelationIdentifier folds a bare relation name (a db/catalog arg or a search-path entry)
+// with the dialect's strategy in the correct RELATION-role context. It parses the name, gives it a
+// parent under argKey ("db" or "catalog") so the role-aware MySQL lctn=0 strategy preserves it — a
+// detached identifier has no parent and would be misread as a foldable column, folding a schema name
+// like `App` to `app` — and so the INFORMATION_SCHEMA exception can fire (a search-path/db entry that
+// is information_schema folds). Quoting is respected exactly as NormalizeIdentifier does; non-role-aware
+// strategies ignore the parent, so their result is unchanged from a detached normalization.
+func normalizeRelationIdentifier(name any, argKey string, d *dialects.Dialect) exp.Expression {
+	// Copy so that when `name` is an existing Identifier node (shared with another AST) we neither
+	// reparent it onto the throwaway table below nor fold its text in place — upstream leaves the
+	// caller's node untouched. A string input already yields a fresh node; the copy is then cheap.
+	id := exp.ParseIdentifier(name, d.Name).Copy()
+	// qualify_tables.py:55/59 parity: mark table-level for a dialect whose normalize reads the meta
+	// (only BigQuery does; inert for base/mysql/pg, whose role now comes from the parent below).
+	id.Meta()["is_table"] = true
+	exp.Table(exp.Args{argKey: id}) // throwaway parent for role (and db-sibling) resolution
+	// Go through NormalizeIdentifiers (not d.NormalizeIdentifier) so an identifier carrying the
+	// case_sensitive meta is skipped, matching upstream and the fixed-DB path. Pass the resolved *d
+	// (not d.Name, which drops the normalization strategy) so the same strategy is applied.
+	return NormalizeIdentifiers(id, d)
+}
+
 func QualifyTables(expression exp.Expression, db any, catalog any, dialect any, canonicalizeTableAliases bool, onQualify func(exp.Expression), searchPath []string, s schema.Schema) exp.Expression {
 	d, err := dialects.GetOrRaise(dialect)
 	if err != nil {
@@ -18,18 +40,11 @@ func QualifyTables(expression exp.Expression, db any, catalog any, dialect any, 
 
 	var dbIdentifier exp.Expression
 	if present(db) {
-		dbIdentifier = exp.ParseIdentifier(db, d.Name)
-		// qualify_tables.py:55: mark as table-level so a dialect's normalize_identifier can
-		// treat it accordingly (only BigQuery reads meta["is_table"]; inert for base/mysql/pg).
-		dbIdentifier.Meta()["is_table"] = true
-		dbIdentifier = NormalizeIdentifiers(dbIdentifier, dialect)
+		dbIdentifier = normalizeRelationIdentifier(db, "db", d)
 	}
 	var catalogIdentifier exp.Expression
 	if present(catalog) {
-		catalogIdentifier = exp.ParseIdentifier(catalog, d.Name)
-		// qualify_tables.py:59: see the db.meta["is_table"] note above.
-		catalogIdentifier.Meta()["is_table"] = true
-		catalogIdentifier = NormalizeIdentifiers(catalogIdentifier, dialect)
+		catalogIdentifier = normalizeRelationIdentifier(catalog, "catalog", d)
 	}
 
 	searchPathMode := len(searchPath) > 0
@@ -40,10 +55,7 @@ func QualifyTables(expression exp.Expression, db any, catalog any, dialect any, 
 			if candidate == "" {
 				continue
 			}
-			identifier := exp.ParseIdentifier(candidate, d.Name)
-			identifier.Meta()["is_table"] = true
-			identifier = NormalizeIdentifiers(identifier, dialect)
-			searchPathIdentifiers = append(searchPathIdentifiers, identifier)
+			searchPathIdentifiers = append(searchPathIdentifiers, normalizeRelationIdentifier(candidate, "db", d))
 		}
 	}
 
@@ -69,12 +81,20 @@ func QualifyTables(expression exp.Expression, db any, catalog any, dialect any, 
 					if supportsDB {
 						for _, candidate := range searchPathIdentifiers {
 							probe := exp.Table(exp.Args{"this": table.This().Copy(), "db": candidate.Copy()})
+							// Fold the probe's table name in the candidate schema's context: an
+							// INFORMATION_SCHEMA table is case-insensitive, so `FROM Tables` must probe the
+							// normalized `tables` key. A no-op for ordinary (case-sensitive) schemas.
+							NormalizeIdentifiers(probe, d)
 							mapping, err := s.Find(probe, false, false)
 							if err != nil {
 								panic(err)
 							}
 							if mapping != nil {
 								table.Set("db", candidate.Copy())
+								// The schema is now known: re-fold the table name in that context so the
+								// stamped identity matches the schema key (again, only INFORMATION_SCHEMA
+								// table names change; every other relation name is preserved).
+								NormalizeIdentifiers(table.This(), d)
 								break
 							}
 						}

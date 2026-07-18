@@ -294,6 +294,16 @@ or downstream) and performs the full `catalog.schema.table` resolution, which fa
 does not exist in *its* catalog. So the division is: **R1 fixes the schema/db dimension by proven
 schema-existence; the caller fixes and enforces the catalog.**
 
+**Identifier folding (role-aware).** The `SearchPath`, `DB`, and `Catalog` names are folded with the
+dialect's normalization strategy in a **relation-role context** — each is parsed and given a Table parent
+under its arg key before `NormalizeIdentifier` runs (`normalizeRelationIdentifier`) — so the role-aware
+MySQL `lower_case_table_names=0` strategy **preserves** a schema name's case (a detached identifier has
+no parent and would be misread as a foldable column, lowercasing `App` to `app`) and the
+INFORMATION_SCHEMA exception (§1.2) applies. A caller may therefore pass the search path in its **raw**
+case: under lctn=0, `SearchPath=["App"]` stamps `db=App` (case-sensitive) and `["app"]` fails to resolve
+`App`; under lctn=1/2 both fold to `app`. Non-role-aware dialects (base/Postgres, default MySQL) ignore
+the parent, so their result is unchanged from a detached normalization.
+
 This is not a parse-grammar construct, so it is neither registered in
 [`testdata/upstream_extensions.jsonl`](./testdata/upstream_extensions.jsonl) nor governed by the
 grammar-extension tripwire.
