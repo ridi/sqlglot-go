@@ -18,6 +18,13 @@ merged, tags the version and publishes the GitHub release. See
 [AGENTS.md § Releasing](./AGENTS.md#releasing). Entries for **v0.5.0 and earlier** were written by hand
 before release-please was adopted.
 
+## [0.6.2](https://github.com/ridi-oss/sqlglot-go/compare/v0.6.1...v0.6.2) (2026-07-18)
+
+
+### CI
+
+* bump googleapis/release-please-action from 4 to 5 ([#20](https://github.com/ridi-oss/sqlglot-go/issues/20)) ([28f2923](https://github.com/ridi-oss/sqlglot-go/commit/28f29239756e0679b58e3de9ed4d76bd71b0e022))
+
 ## [0.6.1](https://github.com/ridi-oss/sqlglot-go/compare/v0.6.0...v0.6.1) (2026-07-18)
 
 
