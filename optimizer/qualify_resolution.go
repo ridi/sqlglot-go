@@ -113,7 +113,7 @@ func classifySelectedSource(source any) ResolvedSource {
 func physicalSource(table exp.Expression) ResolvedSource {
 	return ResolvedSource{
 		Catalog: table.CatalogName(),
-		Schema:  table.DbName(),
+		Schema:  table.SchemaName(),
 		Table:   table.Name(),
 		Kind:    Physical,
 	}

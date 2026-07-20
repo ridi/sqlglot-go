@@ -45,7 +45,7 @@ func TestIdentify(t *testing.T) {
 	if table.Name() != "z" {
 		t.Fatalf("table name = %q", table.Name())
 	}
-	if db := table.Arg("db").(exp.Expression); db.Name() != "y" {
+	if db := table.Arg("schema").(exp.Expression); db.Name() != "y" {
 		t.Fatalf("table db = %q", db.Name())
 	}
 }
@@ -147,7 +147,7 @@ func TestParseAliases(t *testing.T) {
 // TestQualifiedColumnDotChain locks in the _parse_column_ops plain-DOT fix: a
 // dot-continuation field that is a non-VAR keyword or a star forces the slow
 // path, which must produce a bare Identifier/Star field (not a Column-wrapped
-// one) so Name()/Text("table")/Text("db") resolve. Parity verified against
+// one) so Name()/Text("table")/Text("schema") resolve. Parity verified against
 // Python sqlglot 30.12.0.
 func TestQualifiedColumnDotChain(t *testing.T) {
 	cases := []struct {
@@ -167,9 +167,9 @@ func TestQualifiedColumnDotChain(t *testing.T) {
 		if col == nil {
 			t.Fatalf("%q: no column found", tc.sql)
 		}
-		if col.Name() != tc.name || col.Text("table") != tc.table || col.Text("db") != tc.db {
+		if col.Name() != tc.name || col.Text("table") != tc.table || col.Text("schema") != tc.db {
 			t.Fatalf("%q: got Name=%q table=%q db=%q; want %q/%q/%q",
-				tc.sql, col.Name(), col.Text("table"), col.Text("db"), tc.name, tc.table, tc.db)
+				tc.sql, col.Name(), col.Text("table"), col.Text("schema"), tc.name, tc.table, tc.db)
 		}
 	}
 }

@@ -220,10 +220,10 @@ func TestAlterFamilySQL(t *testing.T) {
 			"alter rename postgres strips db",
 			dialects.Postgres(),
 			exp.Alter(exp.Args{
-				"this": exp.Table(exp.Args{"this": exp.ToIdentifier("t"), "db": exp.ToIdentifier("db")}),
+				"this": exp.Table(exp.Args{"this": exp.ToIdentifier("t"), "schema": exp.ToIdentifier("db")}),
 				"kind": "TABLE",
 				"actions": []exp.Expression{exp.AlterRename(exp.Args{
-					"this": exp.Table(exp.Args{"this": exp.ToIdentifier("t2"), "db": exp.ToIdentifier("db")}),
+					"this": exp.Table(exp.Args{"this": exp.ToIdentifier("t2"), "schema": exp.ToIdentifier("db")}),
 				})},
 			}),
 			"ALTER TABLE db.t RENAME TO t2",

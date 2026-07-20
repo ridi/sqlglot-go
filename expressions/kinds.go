@@ -710,7 +710,7 @@ func withQueryModifiers(prefix ...argSpec) []argSpec {
 
 var argTypes = map[Kind][]argSpec{
 	KindExpression: defaultArgTypes,
-	KindColumn:     {{"this", true}, {"table", false}, {"db", false}, {"catalog", false}, {"join_mark", false}},
+	KindColumn:     {{"this", true}, {"table", false}, {"schema", false}, {"catalog", false}, {"join_mark", false}},
 	KindLiteral:    {{"this", true}, {"is_string", true}},
 	KindIdentifier: {{"this", true}, {"quoted", false}, {"global_", false}, {"temporary", false}},
 	KindStar:       {{"except_", false}, {"replace", false}, {"rename", false}, {"ilike", false}},
@@ -753,7 +753,7 @@ var argTypes = map[Kind][]argSpec{
 	KindSelect:              withQueryModifiers(argSpec{"with_", false}, argSpec{"kind", false}, argSpec{"expressions", false}, argSpec{"hint", false}, argSpec{"distinct", false}, argSpec{"into", false}, argSpec{"from_", false}, argSpec{"operation_modifiers", false}, argSpec{"exclude", false}),
 	KindFrom:                defaultArgTypes,
 	KindJoin:                {{"this", true}, {"on", false}, {"side", false}, {"kind", false}, {"using", false}, {"method", false}, {"global_", false}, {"hint", false}, {"match_condition", false}, {"directed", false}, {"expressions", false}, {"pivots", false}},
-	KindTable:               {{"this", false}, {"alias", false}, {"db", false}, {"catalog", false}, {"laterals", false}, {"joins", false}, {"pivots", false}, {"hints", false}, {"system_time", false}, {"version", false}, {"format", false}, {"pattern", false}, {"ordinality", false}, {"when", false}, {"only", false}, {"partition", false}, {"changes", false}, {"rows_from", false}, {"sample", false}, {"indexed", false}},
+	KindTable:               {{"this", false}, {"alias", false}, {"schema", false}, {"catalog", false}, {"laterals", false}, {"joins", false}, {"pivots", false}, {"hints", false}, {"system_time", false}, {"version", false}, {"format", false}, {"pattern", false}, {"ordinality", false}, {"when", false}, {"only", false}, {"partition", false}, {"changes", false}, {"rows_from", false}, {"sample", false}, {"indexed", false}},
 	KindTableAlias:          {{"this", false}, {"columns", false}},
 	KindWhere:               defaultArgTypes,
 	KindGroup:               {{"expressions", false}, {"grouping_sets", false}, {"cube", false}, {"rollup", false}, {"totals", false}, {"all", false}},

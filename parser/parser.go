@@ -828,14 +828,17 @@ func (p *Parser) parseTable(schema bool, joins bool, aliasTokens map[tokens.Toke
 
 func (p *Parser) parseTableParts(schema bool, isDBReference bool, wildcard bool, fast bool) exp.Expression {
 	var catalog exp.Expression
-	var db exp.Expression
+	// schemaPart holds the ANSI-schema-level qualifier (upstream's "db" arg — the port renames
+	// this arg to "schema"; the local can't be named "schema" here as that is already the
+	// schema-position bool param).
+	var schemaPart exp.Expression
 	table := p.parseTablePart(schema)
 	for p.match(tokens.DOT) {
 		if catalog != nil {
 			table = p.expression(exp.Dot(exp.Args{"this": table, "expression": p.parseTablePart(schema)}), nil, nil)
 		} else {
-			catalog = db
-			db = table
+			catalog = schemaPart
+			schemaPart = table
 			table = p.parseTablePart(schema)
 			if table == nil {
 				table = exp.Identifier(exp.Args{"this": "", "quoted": false})
@@ -843,17 +846,17 @@ func (p *Parser) parseTableParts(schema bool, isDBReference bool, wildcard bool,
 		}
 	}
 	if isDBReference {
-		catalog = db
-		db = table
+		catalog = schemaPart
+		schemaPart = table
 		table = nil
 	}
 	if table == nil && !isDBReference {
 		p.raiseError(fmt.Sprintf("Expected table name but got %s", p.curr.String()))
 	}
-	if db == nil && isDBReference {
+	if schemaPart == nil && isDBReference {
 		p.raiseError(fmt.Sprintf("Expected database name but got %s", p.curr.String()))
 	}
-	return p.expression(exp.Table(exp.Args{"this": table, "db": db, "catalog": catalog}), nil, nil)
+	return p.expression(exp.Table(exp.Args{"this": table, "schema": schemaPart, "catalog": catalog}), nil, nil)
 }
 
 func (p *Parser) parseTablePart(schema bool) exp.Expression {
@@ -1843,9 +1846,9 @@ func (p *Parser) parseColumnPartsFast() exp.Expression {
 	case 2:
 		column = exp.Column(exp.Args{"this": parts[1], "table": parts[0]})
 	case 3:
-		column = exp.Column(exp.Args{"this": parts[2], "table": parts[1], "db": parts[0]})
+		column = exp.Column(exp.Args{"this": parts[2], "table": parts[1], "schema": parts[0]})
 	default:
-		column = exp.Column(exp.Args{"this": parts[3], "table": parts[2], "db": parts[1], "catalog": parts[0]})
+		column = exp.Column(exp.Args{"this": parts[3], "table": parts[2], "schema": parts[1], "catalog": parts[0]})
 		for _, part := range parts[4:] {
 			column = exp.Dot(exp.Args{"this": column, "expression": part})
 		}
@@ -1962,7 +1965,7 @@ func (p *Parser) parseColumnOps(this exp.Expression) exp.Expression {
 		if op != nil {
 			this = op(p, this, field)
 		} else if this != nil && this.Kind() == exp.KindColumn && this.Arg("catalog") == nil {
-			this = p.expression(exp.Column(exp.Args{"this": field, "table": this.This(), "db": this.Arg("table"), "catalog": this.Arg("db")}), nil, this.Comments())
+			this = p.expression(exp.Column(exp.Args{"this": field, "table": this.This(), "schema": this.Arg("table"), "catalog": this.Arg("schema")}), nil, this.Comments())
 		} else if field != nil && field.Kind() == exp.KindWindow {
 			// Move the Dot into the window's function (parser.py:6813-6817).
 			windowFunc := p.expression(exp.Dot(exp.Args{"this": this, "expression": field.This()}), nil, nil)

@@ -78,7 +78,7 @@ type Expression interface {
 	ToPy() any
 	Parts() []Expression
 	TableName() string
-	DbName() string
+	SchemaName() string
 	CatalogName() string
 	Left() Expression
 	Right() Expression
@@ -1029,7 +1029,7 @@ func (n *Node) Parts() []Expression {
 	switch n.kind {
 	case KindColumn:
 		parts := []Expression{}
-		for _, key := range []string{"catalog", "db", "table", "this"} {
+		for _, key := range []string{"catalog", "schema", "table", "this"} {
 			if expr := asExpression(n.args[key]); expr != nil {
 				parts = append(parts, expr)
 			}
@@ -1037,7 +1037,7 @@ func (n *Node) Parts() []Expression {
 		return parts
 	case KindTable:
 		parts := []Expression{}
-		for _, key := range []string{"catalog", "db", "this"} {
+		for _, key := range []string{"catalog", "schema", "this"} {
 			part := asExpression(n.args[key])
 			if part == nil {
 				continue
@@ -1066,7 +1066,7 @@ func (n *Node) Parts() []Expression {
 	return nil
 }
 
-var TablePartKeys = []string{"this", "db", "catalog"}
+var TablePartKeys = []string{"this", "schema", "catalog"}
 
 func applyKwargs(e Expression, kwargs Args) Expression {
 	// kwargs is empty or single-key in the M1 surface, so map iteration order is immaterial.
@@ -1077,7 +1077,7 @@ func applyKwargs(e Expression, kwargs Args) Expression {
 }
 
 func (n *Node) TableName() string   { return n.Text("table") }
-func (n *Node) DbName() string      { return n.Text("db") }
+func (n *Node) SchemaName() string  { return n.Text("schema") }
 func (n *Node) CatalogName() string { return n.Text("catalog") }
 func (n *Node) Left() Expression    { return n.This() }
 func (n *Node) Right() Expression   { return n.Expr() }

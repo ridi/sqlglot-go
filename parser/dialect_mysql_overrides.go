@@ -33,7 +33,7 @@ func (p *Parser) parseMySQLInsertSet(this exp.Expression, assignments []exp.Expr
 
 		column := assignment.This()
 		if column == nil || column.Kind() != exp.KindColumn || column.Arg("table") != nil ||
-			column.Arg("db") != nil || column.Arg("catalog") != nil {
+			column.Arg("schema") != nil || column.Arg("catalog") != nil {
 			p.raiseError("MySQL INSERT SET assignment targets must be unqualified columns")
 			return nil, nil
 		}

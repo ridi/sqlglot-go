@@ -144,7 +144,7 @@ func TestAthenaDirectParseIntoHonorsHiveSentinel(t *testing.T) {
 		t.Fatalf("Athena ParseInto result = %#v, want one Table", expressions)
 	}
 	table := expressions[0]
-	if table.Name() != "table_name" || table.Text("db") != "catalog" {
+	if table.Name() != "table_name" || table.Text("schema") != "catalog" {
 		t.Fatalf("Athena Hive-routed ParseInto table mismatch:\n%s", table.ToS())
 	}
 	if identifier := table.This(); identifier == nil || identifier.Arg("quoted") != true {

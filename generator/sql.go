@@ -178,7 +178,7 @@ func (g *Generator) dotSQL(e expressions.Expression) string {
 
 func (g *Generator) columnParts(e expressions.Expression) string {
 	parts := []string{}
-	for _, key := range []string{"catalog", "db", "table", "this"} {
+	for _, key := range []string{"catalog", "schema", "table", "this"} {
 		if v := e.Arg(key); truthy(v) {
 			parts = append(parts, g.gen(v))
 		}
@@ -2482,7 +2482,7 @@ func (g *Generator) intervalSQL(e expressions.Expression) string {
 
 func (g *Generator) tableParts(e expressions.Expression) string {
 	parts := []string{}
-	for _, key := range []string{"catalog", "db", "this"} {
+	for _, key := range []string{"catalog", "schema", "this"} {
 		if v := e.Arg(key); v != nil {
 			parts = append(parts, g.gen(v))
 		}

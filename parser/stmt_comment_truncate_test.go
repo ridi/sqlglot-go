@@ -16,7 +16,7 @@ func TestParseCommentStructured(t *testing.T) {
 		t.Fatalf("kind mismatch:\n%s", comment.ToS())
 	}
 	this := exprArg(t, comment, "this")
-	if this.Kind() != exp.KindTable || this.Name() != "my_table" || this.Text("db") != "my_schema" {
+	if this.Kind() != exp.KindTable || this.Name() != "my_table" || this.Text("schema") != "my_schema" {
 		t.Fatalf("comment target mismatch:\n%s", comment.ToS())
 	}
 	if got := exprArg(t, comment, "expression").Text("this"); got != "Employee Information" {
@@ -35,7 +35,7 @@ func TestParseCommentStructured(t *testing.T) {
 		t.Fatalf("kind mismatch:\n%s", comment.ToS())
 	}
 	col := exprArg(t, comment, "this")
-	if col.Kind() != exp.KindColumn || col.Name() != "my_column" || col.Text("table") != "my_table" || col.Text("db") != "my_schema" {
+	if col.Kind() != exp.KindColumn || col.Name() != "my_column" || col.Text("table") != "my_table" || col.Text("schema") != "my_schema" {
 		t.Fatalf("column target mismatch:\n%s", comment.ToS())
 	}
 
@@ -185,6 +185,37 @@ func TestParseTruncateTableStructured(t *testing.T) {
 		if got != sql {
 			t.Fatalf("%q: round-trip = %q", sql, got)
 		}
+	}
+}
+
+// TestParseTruncateDatabaseReference locks in the is_db_reference overload documented in
+// DEVIATIONS.md §7: ClickHouse-style `TRUNCATE DATABASE <db>` parses via parseTableParts with
+// isDBReference=true, which — mirroring upstream's reuse of the `db` arg slot — stores the genuine
+// DATABASE name under the Table's (renamed) `schema` arg, with an empty `this`. The enclosing
+// TruncateTable carries is_database=true as the discriminator, and it round-trips verbatim.
+func TestParseTruncateDatabaseReference(t *testing.T) {
+	sql := "TRUNCATE DATABASE mydb"
+	truncate := parseOne(t, sql)
+	if truncate.Kind() != exp.KindTruncateTable || truncate.Arg("is_database") != true {
+		t.Fatalf("kind/is_database mismatch:\n%s", truncate.ToS())
+	}
+	tables := expressionsForArg(truncate, "expressions")
+	if len(tables) != 1 || tables[0].Kind() != exp.KindTable {
+		t.Fatalf("truncate target mismatch:\n%s", truncate.ToS())
+	}
+	// The database name lives under the renamed `schema` slot (upstream's overloaded `db`), not `this`.
+	if got := tables[0].Text("schema"); got != "mydb" {
+		t.Fatalf("database name = %q under schema arg, want %q:\n%s", got, "mydb", truncate.ToS())
+	}
+	if this := tables[0].Arg("this"); this != nil {
+		t.Fatalf("expected empty `this` for a db reference, got %v:\n%s", this, truncate.ToS())
+	}
+	got, err := generateSQL(t, truncate, "")
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	if got != sql {
+		t.Fatalf("round-trip = %q, want %q", got, sql)
 	}
 }
 

@@ -773,7 +773,7 @@ func bindDMLSources(scope *Scope, candidates []dmlSourceCandidate, queryScopes m
 			sourceName = expression.AliasOrName()
 			source = expression
 
-			if !candidate.isTarget && expression.DbName() == "" {
+			if !candidate.isTarget && expression.SchemaName() == "" {
 				if cteSource, ok := scope.Sources[tableName]; ok {
 					pivots := expressionsFor(expression, "pivots")
 					if len(pivots) > 0 {
@@ -843,7 +843,7 @@ func _traverseTables(scope *Scope, out *[]*Scope, mode scopeTraversalMode) {
 			sourceName := expression.AliasOrName()
 			var key string
 
-			if source, ok := scope.Sources[tableName]; ok && expression.DbName() == "" {
+			if source, ok := scope.Sources[tableName]; ok && expression.SchemaName() == "" {
 				pivots := expressionsFor(expression, "pivots")
 				if len(pivots) > 0 {
 					key = pivots[0].Alias()

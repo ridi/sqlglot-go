@@ -8,12 +8,16 @@ import (
 type QualifyOpts struct {
 	// Dialect is a DialectType-style value: nil (base), a string (bare name or the
 	// "name, normalization_strategy=..." settings form), or a *dialects.Dialect. Mirrors
-	// upstream sqlglot's polymorphic dialect argument; DB/Catalog/Schema are likewise any.
+	// upstream sqlglot's polymorphic dialect argument; DefaultSchema/Catalog/Schema are likewise any.
 	Dialect any
-	DB      any
-	Catalog any
-	// SearchPath is an ordered, opt-in database search path. Its zero value preserves
-	// upstream-compatible fixed DB/Catalog qualification.
+	// DefaultSchema is the fixed schema-level qualifier stamped on unqualified tables — upstream's
+	// `db=` kwarg (renamed here for the same reason as the Table/Column `schema` arg; see
+	// DEVIATIONS.md §7). Named DefaultSchema, not Schema, because Schema below is the column-metadata
+	// mapping (upstream's `schema=`), mirroring upstream's own two distinct qualify() arguments.
+	DefaultSchema any
+	Catalog       any
+	// SearchPath is an ordered, opt-in schema search path. Its zero value preserves
+	// upstream-compatible fixed DefaultSchema/Catalog qualification.
 	SearchPath                []string
 	Schema                    any
 	ExpandAliasRefs           bool
@@ -57,7 +61,7 @@ func Qualify(expression exp.Expression, opts QualifyOpts) exp.Expression {
 
 	// TODO(slice 4c): store_original_column_identifiers needs Node meta.
 	expression = NormalizeIdentifiers(expression, dialect)
-	expression = QualifyTables(expression, opts.DB, opts.Catalog, dialect, opts.CanonicalizeTableAliases, opts.OnQualify, opts.SearchPath, s)
+	expression = QualifyTables(expression, opts.DefaultSchema, opts.Catalog, dialect, opts.CanonicalizeTableAliases, opts.OnQualify, opts.SearchPath, s)
 
 	if opts.IsolateTables {
 		expression = IsolateTableSelects(expression, s, dialect)

@@ -52,7 +52,7 @@ func TestQualifyTablesSearchPathMySQLLctn0(t *testing.T) {
 
 	// A RAW mixed-case search path resolves and stamps the schema in its original case.
 	tbl := soleTable(qualify("SELECT ID FROM Users", []string{"App"}))
-	if got := tbl.DbName(); got != "App" {
+	if got := tbl.SchemaName(); got != "App" {
 		t.Fatalf("db = %q, want \"App\" (lctn=0 preserves the search-path schema case)", got)
 	}
 	if got := tbl.Name(); got != "Users" {
@@ -61,8 +61,8 @@ func TestQualifyTablesSearchPathMySQLLctn0(t *testing.T) {
 
 	// A lowercased search path must NOT resolve the case-sensitive schema (fail closed, no stamp).
 	miss := soleTable(qualify("SELECT ID FROM Users", []string{"app"}))
-	if miss.DbName() != "" {
-		t.Fatalf("lowercased search path \"app\" wrongly stamped db=%q (schema \"App\" is case-sensitive)", miss.DbName())
+	if miss.SchemaName() != "" {
+		t.Fatalf("lowercased search path \"app\" wrongly stamped db=%q (schema \"App\" is case-sensitive)", miss.SchemaName())
 	}
 }
 
@@ -92,7 +92,7 @@ func TestQualifyTablesSearchPathInformationSchemaLctn0(t *testing.T) {
 	if len(tables) != 1 {
 		t.Fatalf("table count = %d, want 1", len(tables))
 	}
-	if got, gotDB := tables[0].Name(), tables[0].DbName(); got != "tables" || gotDB != "information_schema" {
+	if got, gotDB := tables[0].Name(), tables[0].SchemaName(); got != "tables" || gotDB != "information_schema" {
 		t.Fatalf("resolved %q.%q, want information_schema.tables (info_schema is case-insensitive via search path)", gotDB, got)
 	}
 }
@@ -100,8 +100,8 @@ func TestQualifyTablesSearchPathInformationSchemaLctn0(t *testing.T) {
 // Passing an existing Identifier node as DB must not reparent or mutate the caller's node (upstream
 // leaves it untouched). Regression for the throwaway-table reparenting.
 func TestQualifyTablesDBIdentifierNotMutated(t *testing.T) {
-	owner := exp.Table(exp.Args{"db": exp.ToIdentifier("Owned")})
-	dbID, _ := owner.Arg("db").(exp.Expression)
+	owner := exp.Table(exp.Args{"schema": exp.ToIdentifier("Owned")})
+	dbID, _ := owner.Arg("schema").(exp.Expression)
 	if dbID == nil {
 		t.Fatal("setup: owner.db is not an identifier")
 	}
@@ -142,7 +142,7 @@ func TestQualifyTablesSearchPathMySQLLctn1(t *testing.T) {
 	if len(tables) != 1 {
 		t.Fatalf("table count = %d, want 1", len(tables))
 	}
-	if got := tables[0].DbName(); got != "app" {
+	if got := tables[0].SchemaName(); got != "app" {
 		t.Fatalf("db = %q, want \"app\" (lctn=1 folds the search-path schema)", got)
 	}
 }

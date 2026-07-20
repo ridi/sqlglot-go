@@ -19,7 +19,7 @@ func TestParseDropTable(t *testing.T) {
 
 	drop = parseOne(t, "DROP TABLE a.b")
 	tbl := exprArg(t, drop, "this")
-	if tbl.Kind() != exp.KindTable || tbl.Text("db") != "a" || tbl.Text("this") != "b" {
+	if tbl.Kind() != exp.KindTable || tbl.Text("schema") != "a" || tbl.Text("this") != "b" {
 		t.Fatalf("DROP TABLE dotted target mismatch:\n%s", drop.ToS())
 	}
 
@@ -66,7 +66,7 @@ func TestParseDropMaterializedView(t *testing.T) {
 		t.Fatalf("DROP MATERIALIZED VIEW mismatch:\n%s", drop.ToS())
 	}
 	tbl := exprArg(t, drop, "this")
-	if tbl.Text("catalog") != "x" || tbl.Text("db") != "y" || tbl.Text("this") != "z" {
+	if tbl.Text("catalog") != "x" || tbl.Text("schema") != "y" || tbl.Text("this") != "z" {
 		t.Fatalf("DROP MATERIALIZED VIEW target mismatch:\n%s", drop.ToS())
 	}
 }
@@ -107,7 +107,7 @@ func TestParseDropSchemaCatalogMapping(t *testing.T) {
 	if tbl.Arg("this") != nil {
 		t.Fatalf("DROP SCHEMA catalog.schema: table 'this' should be unset:\n%s", drop.ToS())
 	}
-	if tbl.Text("db") != "schema" || tbl.Text("catalog") != "catalog" {
+	if tbl.Text("schema") != "schema" || tbl.Text("catalog") != "catalog" {
 		t.Fatalf("DROP SCHEMA catalog.schema: db/catalog mismatch:\n%s", drop.ToS())
 	}
 
@@ -116,13 +116,13 @@ func TestParseDropSchemaCatalogMapping(t *testing.T) {
 		t.Fatalf("DROP SCHEMA IF EXISTS mismatch:\n%s", drop.ToS())
 	}
 	tbl = exprArg(t, drop, "this")
-	if tbl.Text("db") != "schema" || tbl.Text("catalog") != "catalog" {
+	if tbl.Text("schema") != "schema" || tbl.Text("catalog") != "catalog" {
 		t.Fatalf("DROP SCHEMA IF EXISTS catalog.schema: db/catalog mismatch (must not be displaced):\n%s", drop.ToS())
 	}
 
 	drop = parseOne(t, "DROP SCHEMA IF EXISTS myschema")
 	tbl = exprArg(t, drop, "this")
-	if tbl.Text("db") != "myschema" || tbl.Arg("catalog") != nil {
+	if tbl.Text("schema") != "myschema" || tbl.Arg("catalog") != nil {
 		t.Fatalf("DROP SCHEMA single-part name mismatch:\n%s", drop.ToS())
 	}
 
@@ -131,7 +131,7 @@ func TestParseDropSchemaCatalogMapping(t *testing.T) {
 		t.Fatalf("CREATE SCHEMA kind mismatch:\n%s", create.ToS())
 	}
 	createTbl := exprArg(t, create, "this")
-	if createTbl.Text("db") != "schema" || createTbl.Text("catalog") != "catalog" {
+	if createTbl.Text("schema") != "schema" || createTbl.Text("catalog") != "catalog" {
 		t.Fatalf("CREATE SCHEMA db/catalog mismatch:\n%s", create.ToS())
 	}
 }

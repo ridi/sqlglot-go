@@ -21,7 +21,7 @@ func TestTrinoRefreshAndNoParenFunctions(t *testing.T) {
 	if refresh.Kind() != exp.KindRefresh || refresh.Arg("kind") != "MATERIALIZED VIEW" {
 		t.Fatalf("REFRESH MATERIALIZED VIEW shape mismatch:\n%s", refresh.ToS())
 	}
-	if table := refresh.This(); table == nil || table.Kind() != exp.KindTable || table.Name() != "test_view" || table.Text("db") != "mynamespace" {
+	if table := refresh.This(); table == nil || table.Kind() != exp.KindTable || table.Name() != "test_view" || table.Text("schema") != "mynamespace" {
 		t.Fatalf("REFRESH target mismatch:\n%s", refresh.ToS())
 	}
 	if got, err := generateSQL(t, refresh, "trino"); err != nil || got != "REFRESH MATERIALIZED VIEW mynamespace.test_view" {

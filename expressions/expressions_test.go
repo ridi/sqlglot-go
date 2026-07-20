@@ -204,8 +204,8 @@ func TestIdentifier(t *testing.T) {
 
 func TestColumnPartial(t *testing.T) {
 	column := parseOne(t, "a.b.c.d")
-	if column.CatalogName() != "a" || column.DbName() != "b" || column.TableName() != "c" || column.Name() != "d" {
-		t.Fatalf("column parts = catalog:%q db:%q table:%q name:%q", column.CatalogName(), column.DbName(), column.TableName(), column.Name())
+	if column.CatalogName() != "a" || column.SchemaName() != "b" || column.TableName() != "c" || column.Name() != "d" {
+		t.Fatalf("column parts = catalog:%q db:%q table:%q name:%q", column.CatalogName(), column.SchemaName(), column.TableName(), column.Name())
 	}
 
 	column = parseOne(t, "a")
@@ -223,8 +223,8 @@ func TestTextPartial(t *testing.T) {
 		t.Fatalf("missing text = %q, want empty", column.Text("y"))
 	}
 	table := parseOne(t, "select * from x.y").Find(exp.KindTable)
-	if table == nil || table.Text("db") != "x" {
-		t.Fatalf("table db text = %q, want x", table.Text("db"))
+	if table == nil || table.Text("schema") != "x" {
+		t.Fatalf("table db text = %q, want x", table.Text("schema"))
 	}
 	if parseOne(t, "select *").Name() != "" {
 		t.Fatalf("select name = %q, want empty", parseOne(t, "select *").Name())

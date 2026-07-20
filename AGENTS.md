@@ -85,6 +85,15 @@ metadata *tables* in `expressions/kinds.go` (ordered arg keys / traits / class n
 type = one `Kind` const + one row in each table + a one-line builder — nodes are **data**, not ~300
 structs. This keeps the generic parser/generator/optimizer code a close 1:1 of the Python.
 
+**One renamed arg — `db` → `schema`.** The `Table`/`Column` **schema-level qualifier** that upstream
+calls `db` (arg-key `"db"`, `.db`, `TABLE_PARTS`) is named **`schema`** in this port — arg-key
+`"schema"`, `SchemaName()`, `Table_(table, schema, catalog, …)` — because `db` is an upstream misnomer
+for the ANSI *schema* (see `DEVIATIONS.md` §7). When porting upstream code that touches a Table/Column
+`db` arg or `.db`, **translate it to `schema`**; leave the *genuine* database `db` alone (`SHOW … FROM
+<db>`, `USE`, `CREATE DATABASE`). Round-trip `.sql()` is unchanged; `.ToS()`/repr renders `schema=`
+where Python renders `db=`, so apply `s/\bdb=/schema=/` (qualifier only) to any Python-captured
+`fidelity_cases.txt` oracle.
+
 ## How to continue the port
 
 1. `scripts/fetch-reference.sh` to get the pinned Python source (needed for parity + as the oracle).
