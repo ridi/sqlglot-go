@@ -224,7 +224,7 @@ func (p *Parser) parseAliasedPivotExpression() exp.Expression {
 	p.match(tokens.ALIAS)
 	alias := p.parseBitwise()
 	if alias != nil {
-		if alias.Kind() == exp.KindColumn && alias.Arg("db") == nil {
+		if alias.Kind() == exp.KindColumn && alias.Arg("schema") == nil {
 			alias = alias.This()
 		}
 		return p.expression(exp.PivotAlias(exp.Args{"this": this, "alias": alias}), nil, nil)

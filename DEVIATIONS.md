@@ -263,44 +263,45 @@ tracks grammar accepted beyond the pinned upstream parser, not opt-in executable
 Pinned upstream `qualify_tables` accepts one fixed `db`/`catalog` and stamps those parts without an
 existence check (`.reference/sqlglot-v30.12.0/sqlglot/optimizer/qualify_tables.py:16-23,62-75`). The
 Go-only `optimizer.QualifyOpts.SearchPath` adds a separate, opt-in resolution mode. The mode switch is
-exact: a nil or empty `SearchPath` uses the existing upstream-faithful fixed `DB`/`Catalog` path
-unchanged, so all existing fixture output remains unchanged; only a non-empty `SearchPath` enables the
-extension.
+exact: a nil or empty `SearchPath` uses the existing upstream-faithful fixed `DefaultSchema`/`Catalog`
+path unchanged, so all existing fixture output remains unchanged; only a non-empty `SearchPath` enables
+the extension.
 
 In non-empty mode, candidates are dialect-normalized and checked in order against the supplied schema.
 A candidate database is stamped only when `schema.Find(..., false, false)` returns a mapping for that
-candidate, and the first proven candidate wins. There is no fallback to the fixed `DB`, and no catalog
-is added. If no candidate is proven, the table remains unqualified so downstream policy can fail
-closed. Absent, ambiguous, empty, flat, or otherwise db-incapable schemas therefore produce no stamp.
-Already-qualified tables and CTE references are preserved and are not rewritten.
+candidate, and the first proven candidate wins. There is no fallback to the fixed `DefaultSchema`, and
+no catalog is added. If no candidate is proven, the table remains unqualified so downstream policy can
+fail closed. Absent, ambiguous, empty, flat, or otherwise schema-incapable schemas therefore produce no
+stamp. Already-qualified tables and CTE references are preserved and are not rewritten.
 
-The lookup requires a schema whose `SupportedTableArgs` includes `db`. An empty schema or a flat,
-table-only mapping is intentionally insufficient because it cannot prove that a table exists in a
-specific database; probing it as though it could would allow a mapping implementation to truncate the
-db-qualified lookup and return an unrelated unscoped table.
+The lookup requires a schema whose `SupportedTableArgs` includes `schema` (this is the port's renamed
+qualifier arg — upstream calls it `db`; see §7). An empty schema or a flat, table-only mapping is
+intentionally insufficient because it cannot prove that a table exists in a specific schema; probing it
+as though it could would allow a mapping implementation to truncate the schema-qualified lookup and
+return an unrelated unscoped table.
 
 This boundary is security-relevant: guessing a database can bind access analysis to a table that the
 actual database would not resolve, creating a wrong-ALLOW decision. Leaving the database absent when
 its resolution cannot be proven is the safe result.
 
-**Dimension resolved (schema/db only; catalog is the caller's).** `SearchPath` resolves the **schema/db**
-part of a table name; it never stamps `catalog`. The probe is a two-part `Table{this, db}`, and this
+**Dimension resolved (schema only; catalog is the caller's).** `SearchPath` resolves the **schema**
+part of a table name; it never stamps `catalog`. The probe is a two-part `Table{this, schema}`, and this
 resolves correctly against a **three-level `catalog.schema.table`** schema too (verified: with a
-`{cat:{schema:{table}}}` mapping, `SELECT * FROM t` under `SearchPath=[schema…]` stamps `db=<schema>` and
-leaves `catalog` unstamped) — `schema.Find` matches a db-qualified probe by schema-level existence, not
-requiring the catalog level, so a depth-3 consumer is **not** silently over-denied. The stamp is a
-schema-level existence superset: a multi-catalog consumer supplies its own `catalog` (via `opts.Catalog`
-or downstream) and performs the full `catalog.schema.table` resolution, which fail-closes if the table
-does not exist in *its* catalog. So the division is: **R1 fixes the schema/db dimension by proven
-schema-existence; the caller fixes and enforces the catalog.**
+`{cat:{schema:{table}}}` mapping, `SELECT * FROM t` under `SearchPath=[schema…]` stamps `schema=<schema>`
+and leaves `catalog` unstamped) — `schema.Find` matches a schema-qualified probe by schema-level
+existence, not requiring the catalog level, so a depth-3 consumer is **not** silently over-denied. The
+stamp is a schema-level existence superset: a multi-catalog consumer supplies its own `catalog` (via
+`opts.Catalog` or downstream) and performs the full `catalog.schema.table` resolution, which fail-closes
+if the table does not exist in *its* catalog. So the division is: **R1 fixes the schema dimension by
+proven schema-existence; the caller fixes and enforces the catalog.**
 
-**Identifier folding (role-aware).** The `SearchPath`, `DB`, and `Catalog` names are folded with the
+**Identifier folding (role-aware).** The `SearchPath`, `DefaultSchema`, and `Catalog` names are folded with the
 dialect's normalization strategy in a **relation-role context** — each is parsed and given a Table parent
 under its arg key before `NormalizeIdentifier` runs (`normalizeRelationIdentifier`) — so the role-aware
 MySQL `lower_case_table_names=0` strategy **preserves** a schema name's case (a detached identifier has
 no parent and would be misread as a foldable column, lowercasing `App` to `app`) and the
 INFORMATION_SCHEMA exception (§1.2) applies. A caller may therefore pass the search path in its **raw**
-case: under lctn=0, `SearchPath=["App"]` stamps `db=App` (case-sensitive) and `["app"]` fails to resolve
+case: under lctn=0, `SearchPath=["App"]` stamps `schema=App` (case-sensitive) and `["app"]` fails to resolve
 `App`; under lctn=1/2 both fold to `app`. Non-role-aware dialects (base/Postgres, default MySQL) ignore
 the parent, so their result is unchanged from a detached normalization.
 
@@ -470,6 +471,70 @@ public analysis path's complete-or-none source-set guarantee for lineage and acc
 covered in `optimizer/scope_dml_test.go`. No `upstream_extensions.jsonl` entry applies because this
 extension changes neither parsing nor SQL generation; it exposes additional analysis scopes over the
 existing AST and grammar.
+
+---
+
+## 7. Table/column qualifier arg renamed `db` → `schema` (API + `.ToS()`; round-trip identical)
+
+**What upstream does:** upstream names the middle table/column qualifier `db` — the `Table`/`Column`
+`db` arg, the `.db` property, `TABLE_PARTS = ("this", "db", "catalog")` /
+`COLUMN_PARTS = ("this", "table", "db", "catalog")`, and `repr()` renders it `db=…`. The name is a
+**misnomer**: this level is the ANSI **schema** (the middle qualifier), *not* a database. Upstream's own
+`table_` builder docstring says so — a table path is `[catalog].[schema].[table]`, and it assigns
+`catalog, db, this = split_num_words(sql_path, ".", 3)`, i.e. the `db` slot **is** the schema
+(`.reference/sqlglot-v30.12.0/sqlglot/expressions/builders.py:360`). The confusion is cross-engine:
+Postgres's *database* is the ANSI **catalog** (→ sqlglot's `catalog` arg), and only MySQL conflates
+`database == schema`. This role ambiguity is what forced the role-aware search-path/`db`/`catalog`
+folding in `qualify_tables` (commit `49965a3`; see *Search-path-aware table qualification* above).
+
+**What sqlglot-go does:** the port renames this one qualifier **everywhere** to `schema`, so the ANSI
+level is explicit in the code:
+- arg-key string `"db"` → `"schema"` on `KindTable` / `KindColumn` (`expressions/kinds.go`);
+- accessor `Node.DbName()` → `Node.SchemaName()` (+ the `Expression` interface) (`expressions/core.go`);
+- `TablePartKeys = []string{"this", "schema", "catalog"}` and the `Parts()` / generator / `qualify`
+  part-order loops (`expressions/core.go`, `generator/sql.go`, `optimizer/qualify_tables.go`);
+- builder params: `Table_(table, schema, catalog, …)`, `Column_(col, table, schema, catalog, …)`,
+  and `QualifyTables(expression, schemaName, catalog, …)` (`schemaName`, not `schema`, because the
+  `schema` package is imported there; likewise `parseTableParts` uses the local `schemaPart` because
+  its `schema bool` DDL-position param already owns the name `schema`);
+- the public qualify option field `QualifyOpts.DB` → `QualifyOpts.DefaultSchema` (`optimizer/qualify.go`),
+  the field that becomes the stamped `schema` arg. It is `DefaultSchema`, not `Schema`, because
+  `QualifyOpts.Schema` is the column-metadata mapping (upstream's `schema=` kwarg) — upstream likewise
+  carries both a `schema=` mapping and a `db=` default qualifier, so the two must stay distinct here.
+The ANSI **catalog** keeps its `catalog` name unchanged.
+
+**Scope boundary — the rename covers the qualifier arg and its direct accessors/setters, not
+upstream-ported symbol names that merely reference the concept.** Dialect/generator flag names ported
+1:1 from upstream keep upstream's `DB` spelling to preserve grep-correspondence with `.reference/` — in
+particular `Dialect.RenameTableWithDB` (← upstream's `RENAME_TABLE_WITH_DB`, `generator.py:344`), which
+governs whether `ALTER TABLE … RENAME` retains the qualifier. It reads/acts on the (renamed) `schema`
+arg but keeps its upstream name.
+
+**Explicitly NOT renamed — genuine "database" sites** (here `db`/`database` really means a database):
+`KindShow`'s `db` arg (`SHOW … FROM <db>`), `KindUse`, `CREATE DATABASE`, `TruncateTable.is_database`,
+the `DATABASE` token, and schema-**mapping data** whose top key happens to be `"db"`. A blanket
+find-replace of `"db"` would corrupt these; they are left as-is.
+
+**One inherited overload — `is_db_reference`.** For the `is_db_reference` construct (e.g. ClickHouse
+`TRUNCATE DATABASE <db>`; `parser.go` `parseTableParts`), upstream reuses the Table's `db` slot to hold
+a genuine **database** name (with `this` empty). The port reuses the same slot, so that name now lives
+under the Table's **`schema`** arg — i.e. `SchemaName()` returns a database there. This is upstream's
+own overloading of the qualifier slot, not a separate site to special-case; the enclosing node's
+`is_database` flag is the discriminator. Round-trip is unchanged (see `parser/stmt_comment_truncate_test.go`).
+
+**Observability:** `.sql()` round-trip output is **unchanged** (identity corpus stays 1847/1847). Two
+surfaces change: (1) the Go API — `SchemaName()` / arg-key `"schema"` / builder params — which is a
+**breaking change** for downstream consumers (use `SchemaName()` and `Arg("schema")`); and (2) `.ToS()`
+/ repr now renders `schema=…` where upstream `repr()` renders `db=…`. The fidelity goldens were updated
+to match (`testdata/fidelity_cases.txt`), so `TestFidelity`'s `WantAST` is the Python oracle **with the
+documented `db=` → `schema=` substitution** — see the porting rule below.
+
+**Porting rule (READ before porting any slice that touches Table/Column qualifiers):** when porting
+upstream code that reads or writes the `db` arg / `.db` property of a `Table` or `Column` (including
+`TABLE_PARTS`/`COLUMN_PARTS` ordering and any `repr` oracle captured from Python), translate `db` →
+`schema`. Do **not** touch the genuine-database `db` listed above. When capturing a new
+`fidelity_cases.txt` `want_ast` from live Python, apply `s/\bdb=/schema=/` to the Table/Column
+qualifier key.
 
 ---
 

@@ -16,7 +16,7 @@ const (
 func mysqlTable(catalog, db, table string) exp.Expression {
 	return exp.Table(exp.Args{
 		"this":    exp.ToIdentifier(table),
-		"db":      exp.ToIdentifier(db),
+		"schema":  exp.ToIdentifier(db),
 		"catalog": exp.ToIdentifier(catalog),
 	})
 }

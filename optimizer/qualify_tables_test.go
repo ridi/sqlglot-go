@@ -31,7 +31,7 @@ type errorOnSearchPathFindSchema struct {
 }
 
 func (errorOnSearchPathFindSchema) SupportedTableArgs() []string {
-	return []string{"this", "db"}
+	return []string{"this", "schema"}
 }
 
 func (s errorOnSearchPathFindSchema) Find(exp.Expression, bool, bool) (*schema.Mapping, error) {
@@ -106,8 +106,8 @@ func TestQualifyTablesSearchPath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewMappingSchema: %v", err)
 	}
-	if got := mapping.SupportedTableArgs(); len(got) != 2 || got[0] != "this" || got[1] != "db" {
-		t.Fatalf("SupportedTableArgs() = %v, want [this db]", got)
+	if got := mapping.SupportedTableArgs(); len(got) != 2 || got[0] != "this" || got[1] != "schema" {
+		t.Fatalf("SupportedTableArgs() = %v, want [this schema]", got)
 	}
 
 	qualify := func(t *testing.T, sql string, s any, searchPath []string, db, catalog any) exp.Expression {
@@ -117,10 +117,10 @@ func TestQualifyTablesSearchPath(t *testing.T) {
 			t.Fatalf("ParseOne: %v", err)
 		}
 		return optimizer.Qualify(expression, optimizer.QualifyOpts{
-			Schema:     s,
-			SearchPath: searchPath,
-			DB:         db,
-			Catalog:    catalog,
+			Schema:        s,
+			SearchPath:    searchPath,
+			DefaultSchema: db,
+			Catalog:       catalog,
 		})
 	}
 
@@ -133,10 +133,10 @@ func TestQualifyTablesSearchPath(t *testing.T) {
 		return tables[0]
 	}
 
-	assertParts := func(t *testing.T, table exp.Expression, wantDB, wantCatalog string) {
+	assertParts := func(t *testing.T, table exp.Expression, wantSchema, wantCatalog string) {
 		t.Helper()
-		if got := table.DbName(); got != wantDB {
-			t.Errorf("table %q db = %q, want %q", table.Name(), got, wantDB)
+		if got := table.SchemaName(); got != wantSchema {
+			t.Errorf("table %q schema = %q, want %q", table.Name(), got, wantSchema)
 		}
 		if got := table.CatalogName(); got != wantCatalog {
 			t.Errorf("table %q catalog = %q, want %q", table.Name(), got, wantCatalog)
@@ -268,8 +268,8 @@ func TestQualifyTablesSearchPath(t *testing.T) {
 		if err != nil {
 			t.Fatalf("NewMappingSchema: %v", err)
 		}
-		if got := depth3.SupportedTableArgs(); len(got) != 3 || got[0] != "this" || got[1] != "db" || got[2] != "catalog" {
-			t.Fatalf("SupportedTableArgs() = %v, want [this db catalog]", got)
+		if got := depth3.SupportedTableArgs(); len(got) != 3 || got[0] != "this" || got[1] != "schema" || got[2] != "catalog" {
+			t.Fatalf("SupportedTableArgs() = %v, want [this schema catalog]", got)
 		}
 
 		searchPath := []string{"public", "analytics"}

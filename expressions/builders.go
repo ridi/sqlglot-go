@@ -48,7 +48,7 @@ func AliasExpr(expression any, alias any, table bool, quoted ...bool) Expression
 	return AliasNode(Args{"this": expr, "alias": aliasExpr})
 }
 
-func Column_(col any, table any, db any, catalog any, fields []any, quoted ...bool) Expression {
+func Column_(col any, table any, schema any, catalog any, fields []any, quoted ...bool) Expression {
 	var colExpr Expression
 	if expr, ok := col.(Expression); ok && expr.Kind() == KindStar {
 		colExpr = expr
@@ -58,7 +58,7 @@ func Column_(col any, table any, db any, catalog any, fields []any, quoted ...bo
 	this := Column(Args{
 		"this":    colExpr,
 		"table":   ToIdentifier(table, quoted...),
-		"db":      ToIdentifier(db, quoted...),
+		"schema":  ToIdentifier(schema, quoted...),
 		"catalog": ToIdentifier(catalog, quoted...),
 	})
 	if len(fields) > 0 {
@@ -140,7 +140,7 @@ func presentPart(v any) bool {
 	return true
 }
 
-func Table_(table, db, catalog any, quoted *bool, alias any) Expression {
+func Table_(table, schema, catalog any, quoted *bool, alias any) Expression {
 	args := Args{}
 	if presentPart(table) {
 		if quoted != nil {
@@ -149,11 +149,11 @@ func Table_(table, db, catalog any, quoted *bool, alias any) Expression {
 			args["this"] = ToIdentifier(table)
 		}
 	}
-	if presentPart(db) {
+	if presentPart(schema) {
 		if quoted != nil {
-			args["db"] = ToIdentifier(db, *quoted)
+			args["schema"] = ToIdentifier(schema, *quoted)
 		} else {
-			args["db"] = ToIdentifier(db)
+			args["schema"] = ToIdentifier(schema)
 		}
 	}
 	if presentPart(catalog) {
@@ -177,11 +177,11 @@ func ToTable(sqlPath any, dialect string, copyValue bool, kwargs Args) (Expressi
 	if err != nil {
 		s := fmt.Sprint(sqlPath)
 		parts := splitNumWords(s, ".", 3, true)
-		catalog, db, this := parts[0], parts[1], parts[2]
+		catalog, schema, this := parts[0], parts[1], parts[2]
 		if this == "" {
 			return nil, err
 		}
-		table = Table_(this, db, catalog, nil, nil)
+		table = Table_(this, schema, catalog, nil, nil)
 	}
 	return applyKwargs(table, kwargs), nil
 }

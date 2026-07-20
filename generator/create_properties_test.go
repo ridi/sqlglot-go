@@ -16,7 +16,7 @@ func createTable(name string) exp.Expression {
 }
 
 func createQualifiedTable(db, name string) exp.Expression {
-	return exp.Table(exp.Args{"this": exp.ToIdentifier(name), "db": exp.ToIdentifier(db)})
+	return exp.Table(exp.Args{"this": exp.ToIdentifier(name), "schema": exp.ToIdentifier(db)})
 }
 
 func createColumn(name string) exp.Expression {

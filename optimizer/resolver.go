@@ -180,7 +180,7 @@ func (r *Resolver) GetSourceColumns(name string, onlyVisible ...bool) []string {
 		panic(&sqlerrors.OptimizeError{Msg: "Unknown table: " + name})
 	}
 
-	if table, ok := source.(exp.Expression); ok && table != nil && table.Kind() == exp.KindTable && table.DbName() == "" && len(expressionsFor(table, "pivots")) > 0 {
+	if table, ok := source.(exp.Expression); ok && table != nil && table.Kind() == exp.KindTable && table.SchemaName() == "" && len(expressionsFor(table, "pivots")) > 0 {
 		if cteSource, ok := r.scope.CTESources[table.Name()]; ok {
 			source = cteSource
 		}

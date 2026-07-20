@@ -9,11 +9,11 @@ import (
 	"github.com/ridi-oss/sqlglot-go/schema"
 )
 
-// normalizeRelationIdentifier folds a bare relation name (a db/catalog arg or a search-path entry)
+// normalizeRelationIdentifier folds a bare relation name (a schema/catalog arg or a search-path entry)
 // with the dialect's strategy in the correct RELATION-role context. It parses the name, gives it a
-// parent under argKey ("db" or "catalog") so the role-aware MySQL lctn=0 strategy preserves it — a
+// parent under argKey ("schema" or "catalog") so the role-aware MySQL lctn=0 strategy preserves it — a
 // detached identifier has no parent and would be misread as a foldable column, folding a schema name
-// like `App` to `app` — and so the INFORMATION_SCHEMA exception can fire (a search-path/db entry that
+// like `App` to `app` — and so the INFORMATION_SCHEMA exception can fire (a search-path/schema entry that
 // is information_schema folds). Quoting is respected exactly as NormalizeIdentifier does; non-role-aware
 // strategies ignore the parent, so their result is unchanged from a detached normalization.
 func normalizeRelationIdentifier(name any, argKey string, d *dialects.Dialect) exp.Expression {
@@ -24,23 +24,23 @@ func normalizeRelationIdentifier(name any, argKey string, d *dialects.Dialect) e
 	// qualify_tables.py:55/59 parity: mark table-level for a dialect whose normalize reads the meta
 	// (only BigQuery does; inert for base/mysql/pg, whose role now comes from the parent below).
 	id.Meta()["is_table"] = true
-	exp.Table(exp.Args{argKey: id}) // throwaway parent for role (and db-sibling) resolution
+	exp.Table(exp.Args{argKey: id}) // throwaway parent for role (and schema-sibling) resolution
 	// Go through NormalizeIdentifiers (not d.NormalizeIdentifier) so an identifier carrying the
 	// case_sensitive meta is skipped, matching upstream and the fixed-DB path. Pass the resolved *d
 	// (not d.Name, which drops the normalization strategy) so the same strategy is applied.
 	return NormalizeIdentifiers(id, d)
 }
 
-func QualifyTables(expression exp.Expression, db any, catalog any, dialect any, canonicalizeTableAliases bool, onQualify func(exp.Expression), searchPath []string, s schema.Schema) exp.Expression {
+func QualifyTables(expression exp.Expression, schemaName any, catalog any, dialect any, canonicalizeTableAliases bool, onQualify func(exp.Expression), searchPath []string, s schema.Schema) exp.Expression {
 	d, err := dialects.GetOrRaise(dialect)
 	if err != nil {
 		panic(err)
 	}
 	nextAliasName := nameSequence("_")
 
-	var dbIdentifier exp.Expression
-	if present(db) {
-		dbIdentifier = normalizeRelationIdentifier(db, "db", d)
+	var schemaIdentifier exp.Expression
+	if present(schemaName) {
+		schemaIdentifier = normalizeRelationIdentifier(schemaName, "schema", d)
 	}
 	var catalogIdentifier exp.Expression
 	if present(catalog) {
@@ -55,15 +55,15 @@ func QualifyTables(expression exp.Expression, db any, catalog any, dialect any, 
 			if candidate == "" {
 				continue
 			}
-			searchPathIdentifiers = append(searchPathIdentifiers, normalizeRelationIdentifier(candidate, "db", d))
+			searchPathIdentifiers = append(searchPathIdentifiers, normalizeRelationIdentifier(candidate, "schema", d))
 		}
 	}
 
-	supportsDB := false
+	supportsSchema := false
 	if searchPathMode && s != nil {
 		for _, tableArg := range s.SupportedTableArgs() {
-			if tableArg == "db" {
-				supportsDB = true
+			if tableArg == "schema" {
+				supportsSchema = true
 				break
 			}
 		}
@@ -74,13 +74,13 @@ func QualifyTables(expression exp.Expression, db any, catalog any, dialect any, 
 			return
 		}
 		if table.This() != nil && table.This().Kind() == exp.KindIdentifier {
-			if table.Arg("db") == nil {
+			if table.Arg("schema") == nil {
 				if searchPathMode {
 					// Unlike .reference/sqlglot-v30.12.0/sqlglot/optimizer/qualify_tables.py:62-67,
-					// this opt-in extension requires schema-backed proof instead of applying one fixed db.
-					if supportsDB {
+					// this opt-in extension requires schema-backed proof instead of applying one fixed schema.
+					if supportsSchema {
 						for _, candidate := range searchPathIdentifiers {
-							probe := exp.Table(exp.Args{"this": table.This().Copy(), "db": candidate.Copy()})
+							probe := exp.Table(exp.Args{"this": table.This().Copy(), "schema": candidate.Copy()})
 							// Fold the probe's table name in the candidate schema's context: an
 							// INFORMATION_SCHEMA table is case-insensitive, so `FROM Tables` must probe the
 							// normalized `tables` key. A no-op for ordinary (case-sensitive) schemas.
@@ -90,7 +90,7 @@ func QualifyTables(expression exp.Expression, db any, catalog any, dialect any, 
 								panic(err)
 							}
 							if mapping != nil {
-								table.Set("db", candidate.Copy())
+								table.Set("schema", candidate.Copy())
 								// The schema is now known: re-fold the table name in that context so the
 								// stamped identity matches the schema key (again, only INFORMATION_SCHEMA
 								// table names change; every other relation name is preserved).
@@ -99,17 +99,17 @@ func QualifyTables(expression exp.Expression, db any, catalog any, dialect any, 
 							}
 						}
 					}
-				} else if dbIdentifier != nil {
-					table.Set("db", dbIdentifier.Copy())
+				} else if schemaIdentifier != nil {
+					table.Set("schema", schemaIdentifier.Copy())
 				}
 			}
-			if !searchPathMode && catalogIdentifier != nil && table.Arg("catalog") == nil && table.Arg("db") != nil {
+			if !searchPathMode && catalogIdentifier != nil && table.Arg("catalog") == nil && table.Arg("schema") != nil {
 				table.Set("catalog", catalogIdentifier.Copy())
 			}
 		}
 	}
 
-	if (dbIdentifier != nil || catalogIdentifier != nil || searchPathMode) && !expression.Is(exp.TraitQuery) {
+	if (schemaIdentifier != nil || catalogIdentifier != nil || searchPathMode) && !expression.Is(exp.TraitQuery) {
 		cteNames := map[string]bool{}
 		with := asExpression(expression.Arg("with_"))
 		if with != nil {
@@ -287,12 +287,12 @@ func QualifyTables(expression exp.Expression, db any, catalog any, dialect any, 
 
 		for _, column := range localColumns {
 			columnTable := column.Text("table")
-			if column.Text("db") != "" {
+			if column.Text("schema") != "" {
 				parts := column.Parts()
 				if len(parts) > 1 {
 					tableAlias := tableAliases[partsName(parts[:len(parts)-1])]
 					if tableAlias != nil {
-						for _, key := range []string{"table", "db", "catalog"} {
+						for _, key := range []string{"table", "schema", "catalog"} {
 							column.Set(key, nil)
 						}
 						column.Set("table", tableAlias.Copy())

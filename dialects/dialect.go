@@ -22,7 +22,7 @@ const (
 	// strategies. That fold is exported (MySQLLower) so a consumer can call the same
 	// implementation via a native binding, guaranteeing a byte-identical normalized identifier.
 
-	// MySQLCaseInsensitive folds EVERY identifier (columns AND table/db names), regardless of
+	// MySQLCaseInsensitive folds EVERY identifier (columns AND table/schema names), regardless of
 	// quoting, with MySQLLower. Models MySQL with lower_case_table_names=1/2 (all names
 	// case-insensitive).
 	MySQLCaseInsensitive
@@ -782,8 +782,8 @@ func asciiUpper(s string) string {
 // column). Under MySQL lower_case_table_names=0 (the MySQLCaseSensitiveTableNames strategy) these are
 // case-SENSITIVE and must NOT fold, while column-level identifiers stay case-INSENSITIVE and fold. The
 // relation-level positions are:
-//   - a this/db/catalog child of an exp.Table    — a physical table/db/catalog name
-//   - a table/db/catalog child of an exp.Column  — a column QUALIFIER (it references a relation/alias)
+//   - a this/schema/catalog child of an exp.Table    — a physical table/schema/catalog name
+//   - a table/schema/catalog child of an exp.Column  — a column QUALIFIER (it references a relation/alias)
 //   - the this child of an exp.TableAlias        — a table alias OR a CTE name
 //
 // Everything else folds: exp.Column.this (the leaf column name), exp.TableAlias.columns (a CTE
@@ -801,12 +801,12 @@ func isRelationLevelIdentifier(e exp.Expression) bool {
 	switch p.Kind() {
 	case exp.KindTable:
 		switch e.ArgKey() {
-		case "this", "db", "catalog":
+		case "this", "schema", "catalog":
 			return true
 		}
 	case exp.KindColumn:
 		switch e.ArgKey() {
-		case "table", "db", "catalog":
+		case "table", "schema", "catalog":
 			return true
 		}
 	case exp.KindTableAlias:
@@ -822,32 +822,32 @@ func isRelationLevelIdentifier(e exp.Expression) bool {
 // (live-verified on MySQL 8.0.46, lctn=0: `INFORMATION_SCHEMA.tables`, `information_schema.TABLES`, and
 // mixed case all resolve, while `PERFORMANCE_SCHEMA`/`MySQL`/`SYS` error). So under the lctn=0 strategy
 // these parts must fold even though sibling relation-level identifiers are preserved. It reads the
-// sibling db (never e's own kind), so a CTE/derived reference is never mistaken for information_schema.
+// sibling schema (never e's own kind), so a CTE/derived reference is never mistaken for information_schema.
 // See DEVIATIONS.md §1.2.
 func isInformationSchemaRelationPart(e exp.Expression) bool {
 	p := e.Parent()
 	if p == nil {
 		return false
 	}
-	var db exp.Expression
+	var schemaID exp.Expression
 	switch p.Kind() {
 	case exp.KindTable, exp.KindColumn:
-		db, _ = p.Arg("db").(exp.Expression)
+		schemaID, _ = p.Arg("schema").(exp.Expression)
 	default:
 		return false
 	}
-	if db == nil || db.Kind() != exp.KindIdentifier {
+	if schemaID == nil || schemaID.Kind() != exp.KindIdentifier {
 		return false
 	}
 	// Match with MySQL's own fold (MySQLLower / utf8mb3_general_ci), not Go's Unicode fold: MySQL
 	// recognizes the virtual schema case-insensitively via that collation (e.g. İ U+0130 → i) and NOT
 	// via characters Go folds but MySQL keeps distinct (e.g. ſ U+017F). "information_schema" is already
 	// MySQLLower-folded, so compare the folded name to it directly.
-	if name, _ := db.Arg("this").(string); MySQLLower(name) != "information_schema" {
+	if name, _ := schemaID.Arg("this").(string); MySQLLower(name) != "information_schema" {
 		return false
 	}
 	switch e.ArgKey() {
-	case "db":
+	case "schema":
 		return true // the schema name itself
 	case "this":
 		return p.Kind() == exp.KindTable // the table under information_schema
@@ -862,7 +862,7 @@ func isInformationSchemaRelationPart(e exp.Expression) bool {
 // counterpart to NormalizeIdentifier — which derives an identifier's role from its parent — for
 // callers that must fold a detached name (e.g. a catalog/schema key) where no AST context
 // exists. isTable selects the role for the role-aware MySQLCaseSensitiveTableNames strategy
-// (lctn=0): true = a relation-level name (table/db/catalog/alias/CTE) that stays case-sensitive;
+// (lctn=0): true = a relation-level name (table/schema/catalog/alias/CTE) that stays case-sensitive;
 // false = a column-level name that folds. It is ignored by the other strategies.
 //
 // The input is treated as an UNQUOTED name (folding is unconditional): callers pass a name they
@@ -896,7 +896,7 @@ func (d *Dialect) NormalizeIdentifier(e exp.Expression) exp.Expression {
 	// quoting (MySQL identifier case-insensitivity ignores backticks). See DEVIATIONS.md §1.2.
 	switch s {
 	case MySQLCaseSensitiveTableNames:
-		// Role-aware (models lctn=0): relation-level identifiers — table/db/catalog names, column
+		// Role-aware (models lctn=0): relation-level identifiers — table/schema/catalog names, column
 		// QUALIFIERS, and table-alias/CTE names — stay case-sensitive; column-level identifiers (leaf
 		// column names, CTE output-column lists, column aliases) fold with MySQLLower. EXCEPTION:
 		// INFORMATION_SCHEMA is a virtual schema MySQL matches case-insensitively regardless of lctn

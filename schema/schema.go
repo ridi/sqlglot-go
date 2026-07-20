@@ -419,7 +419,7 @@ func (m *MappingSchema) normalizeMapping(schema *Mapping) (*Mapping, error) {
 // (rather than folding each bare string in isolation) so the role-aware MySQL lctn=0 strategy can
 // (a) preserve relation names — a detached identifier has no parent, and the strategy would misread it
 // as a foldable column (the bulk-mapping mis-fold bug) — and (b) apply the INFORMATION_SCHEMA
-// case-insensitivity exception, which needs the sibling db to fire. Non-role-aware strategies ignore
+// case-insensitivity exception, which needs the sibling schema to fire. Non-role-aware strategies ignore
 // the parent, so their output is byte-identical to per-key folding.
 func (m *MappingSchema) normalizeRelationKeys(keys []string, dialect string) ([]string, error) {
 	dialectName := dialect
@@ -440,11 +440,11 @@ func (m *MappingSchema) normalizeRelationKeys(keys []string, dialect string) ([]
 		// schema.py:704 parity: record the relation role for a dialect whose normalize reads it.
 		parts[i].Meta()["is_table"] = true
 	}
-	// Assemble the deepest three parts (catalog, db, table) into a Table so each gains a parent (role)
-	// and the db sibling (info_schema).
+	// Assemble the deepest three parts (catalog, schema, table) into a Table so each gains a parent (role)
+	// and the schema sibling (info_schema).
 	args := exp.Args{"this": parts[n-1]}
 	if n >= 2 {
-		args["db"] = parts[n-2]
+		args["schema"] = parts[n-2]
 	}
 	if n >= 3 {
 		args["catalog"] = parts[n-3]
