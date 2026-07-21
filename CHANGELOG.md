@@ -18,6 +18,13 @@ merged, tags the version and publishes the GitHub release. See
 [AGENTS.md § Releasing](./AGENTS.md#releasing). Entries for **v0.5.0 and earlier** were written by hand
 before release-please was adopted.
 
+## [0.8.1](https://github.com/ridi-oss/sqlglot-go/compare/v0.8.0...v0.8.1) (2026-07-21)
+
+
+### Bug Fixes
+
+* **optimizer:** fold an injected table alias with its relation-level role ([#27](https://github.com/ridi-oss/sqlglot-go/issues/27)) ([ba889a5](https://github.com/ridi-oss/sqlglot-go/commit/ba889a5e99ac7376305e9edbb7ed5ad452d88e81))
+
 ## [0.8.0](https://github.com/ridi-oss/sqlglot-go/compare/v0.7.0...v0.8.0) (2026-07-21)
 
 
