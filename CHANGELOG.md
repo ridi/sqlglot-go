@@ -18,6 +18,13 @@ merged, tags the version and publishes the GitHub release. See
 [AGENTS.md § Releasing](./AGENTS.md#releasing). Entries for **v0.5.0 and earlier** were written by hand
 before release-please was adopted.
 
+## [0.8.0](https://github.com/ridi-oss/sqlglot-go/compare/v0.7.0...v0.8.0) (2026-07-21)
+
+
+### Features
+
+* name the polymorphic dialect/schema args (DialectType, SchemaType, IdentifierName) ([#25](https://github.com/ridi-oss/sqlglot-go/issues/25)) ([99d1b71](https://github.com/ridi-oss/sqlglot-go/commit/99d1b71296df8152d33d4981af90ff11f0ea05e8))
+
 ## [0.7.0](https://github.com/ridi-oss/sqlglot-go/compare/v0.6.2...v0.7.0) (2026-07-20)
 
 
