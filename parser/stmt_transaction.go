@@ -47,12 +47,23 @@ func (p *Parser) parseTransaction() exp.Expression {
 
 	var modes []string
 	for {
-		var mode []string
-		for p.match(tokens.VAR) || p.match(tokens.NOT) {
-			mode = append(mode, p.prev.Text)
-		}
-		if len(mode) > 0 {
-			modes = append(modes, strings.Join(mode, " "))
+		// MySQL's `START TRANSACTION WITH CONSISTENT SNAPSHOT` — WITH lexes as its own token,
+		// so it isn't caught by the VAR run below. Gated to MySQL: real MySQL 8.0.33 accepts it,
+		// but real PostgreSQL 17.6 rejects it, and pinned upstream errors on it in both. Kept as a
+		// single mode string so it round-trips as one unit.
+		if p.dialect.Name == "mysql" && p.matchTextSeq("WITH", "CONSISTENT", "SNAPSHOT") {
+			modes = append(modes, "WITH CONSISTENT SNAPSHOT")
+		} else {
+			var mode []string
+			// tokens.ONLY is also consumed (in addition to upstream's VAR|NOT) so Postgres
+			// `START TRANSACTION READ ONLY` parses: postgres lexes ONLY as a dedicated token
+			// (for `TABLE ONLY`), not VAR, but here it is just a transaction-mode word.
+			for p.match(tokens.VAR) || p.match(tokens.NOT) || p.match(tokens.ONLY) {
+				mode = append(mode, p.prev.Text)
+			}
+			if len(mode) > 0 {
+				modes = append(modes, strings.Join(mode, " "))
+			}
 		}
 		if !p.match(tokens.COMMA) {
 			break
