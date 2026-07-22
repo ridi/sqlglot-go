@@ -715,12 +715,15 @@ var noParenFunctionTokens = map[tokens.TokenType]bool{
 // parseNoParenCurrentFunc builds the node a bare CURRENT_*-family keyword should produce in a
 // DEFAULT/ON UPDATE column-constraint value (see noParenFunctionTokens above), or returns nil
 // (consuming nothing) when curr isn't one of those tokens or is immediately followed by "(".
-// CURRENT_DATE/CURRENT_TIME map to their dedicated Kinds via noParenFunctions (matching the
-// no-paren keyword path in parseFunctionCall) so `DEFAULT CURRENT_DATE` renders bare
-// CURRENT_DATE and `DEFAULT CURRENT_TIME` renders CURRENT_TIME() - byte-for-byte with the
-// pinned oracle. The remaining family members (CURRENT_TIMESTAMP/CURRENT_USER/CURRENT_ROLE)
-// have no dedicated Kind yet, so they keep the zero-arg exp.Anonymous shape parseFunctionCall's
-// anonymous fallback also builds (e.g. `DEFAULT CURRENT_TIMESTAMP` -> CURRENT_TIMESTAMP()).
+// All six of noParenFunctionTokens now map to a dedicated Kind via the base noParenFunctions map
+// (CURRENT_DATE/CURRENT_DATETIME -> CurrentDate, CURRENT_TIME -> CurrentTime, CURRENT_TIMESTAMP ->
+// CurrentTimestamp, CURRENT_USER -> CurrentUser, CURRENT_ROLE -> CurrentRole), matching the
+// no-paren keyword path in parseFunctionCall, so e.g. `DEFAULT CURRENT_DATE` renders bare
+// CURRENT_DATE and `DEFAULT CURRENT_TIMESTAMP` renders CURRENT_TIMESTAMP() (mysql, via the
+// generator's function fallback) - byte-for-byte with the pinned oracle. Because
+// noParenFunctionTokens is now a subset of noParenFunctions' keys, the trailing exp.Anonymous
+// fallback below is unreachable for the current token set; it is retained defensively so any
+// future noParenFunctionTokens entry lacking a builder still degrades to a zero-arg Anonymous.
 func (p *Parser) parseNoParenCurrentFunc() exp.Expression {
 	if !noParenFunctionTokens[p.curr.TokenType] || p.next.TokenType == tokens.L_PAREN {
 		return nil

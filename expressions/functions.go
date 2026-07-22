@@ -321,3 +321,14 @@ func Overlay(args Args) Expression        { return newNode(KindOverlay, args) }
 func Variadic(args Args) Expression       { return newNode(KindVariadic, args) }
 func CurrentDate(args Args) Expression    { return newNode(KindCurrentDate, args) }
 func CurrentTime(args Args) Expression    { return newNode(KindCurrentTime, args) }
+
+// Niladic system-value function builders wired into NO_PAREN_FUNCTIONS (parser.py:431-438
+// and the postgres/mysql overrides). CurrentSchema previously had no dedicated builder (it
+// was only reached via mysql's FromArgListFunc for DATABASE/SCHEMA); postgres's bare
+// CURRENT_SCHEMA path needs one.
+func CurrentUser(args Args) Expression    { return newNode(KindCurrentUser, args) }    // functions.py:309
+func CurrentRole(args Args) Expression    { return newNode(KindCurrentRole, args) }    // functions.py:277
+func SessionUser(args Args) Expression    { return newNode(KindSessionUser, args) }    // functions.py:325
+func Localtime(args Args) Expression      { return newNode(KindLocaltime, args) }      // temporal.py:49
+func Localtimestamp(args Args) Expression { return newNode(KindLocaltimestamp, args) } // temporal.py:53
+func CurrentSchema(args Args) Expression  { return newNode(KindCurrentSchema, args) }  // functions.py:285

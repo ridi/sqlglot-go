@@ -163,7 +163,10 @@ func TestPrestoFunctionsRoundTrip(t *testing.T) {
 		{"SELECT FROM_UNIXTIME(x, h, m)", "SELECT UNIX_TO_TIME(x, h, m)"},
 		{"SELECT FROM_UTF8(x)", "SELECT DECODE(x, 'utf-8')"},
 		{"SELECT LEVENSHTEIN_DISTANCE(a, b)", "SELECT LEVENSHTEIN(a, b)"},
-		{"SELECT NOW()", "SELECT CURRENT_TIMESTAMP()"},
+		// Presto renders CurrentTimestamp bare (generators/presto.py:289 `lambda *_:
+		// "CURRENT_TIMESTAMP"`); the previous parenthesized expectation was a port bug fixed by
+		// the niladic-function generator gating.
+		{"SELECT NOW()", "SELECT CURRENT_TIMESTAMP"},
 		{"SELECT REPLACE(a, b, c)", "SELECT REPLACE(a, b, c)"},
 		{"SELECT ROW(a, b)", "SELECT STRUCT(a, b)"},
 		{"SELECT SEQUENCE(a, b)", "SELECT GENERATE_SERIES(a, b)"},

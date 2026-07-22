@@ -809,11 +809,32 @@ func init() {
 		},
 		"WITH": func(p *Parser, _ bool) exp.Expression { return p.parseWithProperty() },
 	}
+	// parsers/base.py:8-13 BaseParser (which dialects/dialect.py:773 sets as the default `Dialect`'s
+	// parser_class) adds LOCALTIME/LOCALTIMESTAMP/CURRENT_CATALOG/SESSION_USER on top of
+	// parser.Parser's base six, so the default ("base") dialect resolves those bare keywords to
+	// their dedicated function nodes. MySQL/Postgres extend parser.Parser directly (not BaseParser),
+	// so each carries only its own subset below. (Presto/Trino niladic completeness is out of this
+	// slice's base+MySQL+Postgres scope.)
+	registerDialectParserOverrides("base", dialectParserOverrideSet{
+		NoParenFunctions: map[tokens.TokenType]func(exp.Args) exp.Expression{
+			tokens.LOCALTIME:       exp.Localtime,
+			tokens.LOCALTIMESTAMP:  exp.Localtimestamp,
+			tokens.CURRENT_CATALOG: exp.CurrentCatalog,
+			tokens.SESSION_USER:    exp.SessionUser,
+		},
+	})
 	registerDialectParserOverrides("mysql", dialectParserOverrideSet{
 		// GROUP_CONCAT: MySQL FUNCTION_PARSERS entry (parsers/mysql.py:156); see
 		// parseGroupConcat in dialect_mysql_overrides.go.
 		FunctionParsers: map[string]parserOverrideFunc{
 			"GROUP_CONCAT": (*Parser).parseGroupConcat,
+		},
+		// parsers/mysql.py:55-59 NO_PAREN_FUNCTIONS adds LOCALTIME/LOCALTIMESTAMP on top of the
+		// base six. session_user/current_catalog/current_schema stay Columns in MySQL (unlike
+		// postgres), matching the real server (they are not niladic keywords there).
+		NoParenFunctions: map[tokens.TokenType]func(exp.Args) exp.Expression{
+			tokens.LOCALTIME:      exp.Localtime,
+			tokens.LOCALTIMESTAMP: exp.Localtimestamp,
 		},
 		// mysql-replace divergence from dialects/mysql.py:154: the tokenizer no longer
 		// packs REPLACE as Command, so this override can disambiguate REPLACE(...).
@@ -837,6 +858,18 @@ func init() {
 	registerDialectParserOverrides("postgres", dialectParserOverrideSet{
 		StatementParsers: map[tokens.TokenType]parserOverrideFunc{
 			tokens.DESCRIBE: (*Parser).parsePostgresExplain,
+		},
+		// parsers/postgres.py:145-152 NO_PAREN_FUNCTIONS adds LOCALTIME/LOCALTIMESTAMP,
+		// CURRENT_CATALOG, SESSION_USER, and CURRENT_SCHEMA on top of the base six, so bare
+		// (no-paren) `session_user`, `current_catalog`, `current_schema`, `localtime`, and
+		// `localtimestamp` parse to their dedicated function nodes (matching real Postgres,
+		// where these are niladic system functions), not Columns.
+		NoParenFunctions: map[tokens.TokenType]func(exp.Args) exp.Expression{
+			tokens.LOCALTIME:       exp.Localtime,
+			tokens.LOCALTIMESTAMP:  exp.Localtimestamp,
+			tokens.CURRENT_CATALOG: exp.CurrentCatalog,
+			tokens.SESSION_USER:    exp.SessionUser,
+			tokens.CURRENT_SCHEMA:  exp.CurrentSchema,
 		},
 		PropertyParsers: map[string]propertyParserFunc{
 			"SET": func(p *Parser, _ bool) exp.Expression {

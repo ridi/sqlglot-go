@@ -650,6 +650,14 @@ const (
 	KindTimeToStr              // temporal.py:476-477
 	KindStarMap                // array.py:331-332
 	KindVarMap                 // array.py:339-341
+	// Niladic system-value functions completing NO_PAREN_FUNCTIONS (parser.py:431-438 +
+	// parsers/base.py:8-13, parsers/postgres.py:145-152, parsers/mysql.py:55-59). CurrentDate/
+	// CurrentTime/CurrentTimestamp/CurrentSchema/CurrentCatalog already exist above.
+	KindCurrentUser    // functions.py:309-310
+	KindCurrentRole    // functions.py:277-278
+	KindSessionUser    // functions.py:325-326
+	KindLocaltime      // temporal.py:49-50
+	KindLocaltimestamp // temporal.py:53-54
 )
 
 type Trait uint32
@@ -1190,6 +1198,11 @@ var argTypes = map[Kind][]argSpec{
 	KindUnhex:            {{"this", true}, {"expression", false}},                                                                                              // string.py:405
 	KindArraySlice:       {{"this", true}, {"start", true}, {"end", false}, {"step", false}, {"zero_based", false}},                                            // array.py:85
 	KindCurrentTimestamp: {{"this", false}, {"sysdate", false}},                                                                                                // temporal.py:37
+	KindCurrentUser:      {{"this", false}},                                                                                                                    // functions.py:309
+	KindCurrentRole:      {},                                                                                                                                   // functions.py:277 (empty arg_types)
+	KindSessionUser:      {},                                                                                                                                   // functions.py:325 (empty arg_types)
+	KindLocaltime:        {{"this", false}},                                                                                                                    // temporal.py:49
+	KindLocaltimestamp:   {{"this", false}},                                                                                                                    // temporal.py:53
 	KindUnicodeString:    {{"this", true}, {"escape", false}},                                                                                                  // query.py:494
 	// trino cluster: arg_types mirror the pinned declarations exactly. In particular,
 	// CurrentCatalog and CurrentVersion have genuinely empty arg maps, not optional `this`.
@@ -1470,6 +1483,11 @@ var traitsOf = map[Kind]Trait{
 	KindUnhex:            TraitCondition | TraitFunc,
 	KindArraySlice:       TraitCondition | TraitFunc,
 	KindCurrentTimestamp: TraitCondition | TraitFunc,
+	KindCurrentUser:      TraitCondition | TraitFunc,
+	KindCurrentRole:      TraitCondition | TraitFunc,
+	KindSessionUser:      TraitCondition | TraitFunc,
+	KindLocaltime:        TraitCondition | TraitFunc,
+	KindLocaltimestamp:   TraitCondition | TraitFunc,
 	KindUnicodeString:    TraitCondition,
 	// trino cluster: only the Func subclasses carry traits. JSONExtractQuote,
 	// OverflowTruncateBehavior, and Refresh are plain Expression subclasses upstream.
@@ -1915,6 +1933,11 @@ var className = map[Kind]string{
 	KindUnhex:            "Unhex",
 	KindArraySlice:       "ArraySlice",
 	KindCurrentTimestamp: "CurrentTimestamp",
+	KindCurrentUser:      "CurrentUser",
+	KindCurrentRole:      "CurrentRole",
+	KindSessionUser:      "SessionUser",
+	KindLocaltime:        "Localtime",
+	KindLocaltimestamp:   "Localtimestamp",
 	KindUnicodeString:    "UnicodeString",
 	// trino cluster: exact upstream PascalCase class names.
 	KindCurrentCatalog:           "CurrentCatalog",

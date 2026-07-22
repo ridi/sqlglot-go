@@ -53,10 +53,79 @@ func (g *Generator) mysqlRenameFunc(e expressions.Expression, name string) strin
 // default name (CURRENT_SCHEMA, from the class name, functions.py:285) via
 // functionFallbackSQL.
 func (g *Generator) currentSchemaSQL(e expressions.Expression) string {
-	if g.dialect.Name != "mysql" {
-		return g.functionFallbackSQL(e)
+	switch g.dialect.Name {
+	case "mysql":
+		// generators/mysql.py:807-809 `@unsupported_args("this"); return self.func("SCHEMA")`.
+		return g.funcCall("SCHEMA", nil, "(", ")", true)
+	case "postgres":
+		// generators/postgres.py:527-528 `@unsupported_args("this"); return "CURRENT_SCHEMA"` —
+		// bare, no parens, dropping any precision arg. Reached now that postgres builds
+		// CurrentSchema from the bare CURRENT_SCHEMA keyword (its NoParenFunctions override).
+		return "CURRENT_SCHEMA"
 	}
-	return g.funcCall("SCHEMA", nil, "(", ")", true)
+	// Base/presto/trino/hive have no currentschema_sql override, so they keep the parenthesized
+	// functionFallback (CURRENT_SCHEMA()), matching pinned upstream's default generator (base
+	// generator.py has no CurrentSchema entry at all).
+	return g.functionFallbackSQL(e)
+}
+
+// niladicBareDialects are the dialects whose generator renders CurrentTimestamp/CurrentUser as the
+// bare keyword (no parens): postgres (generators/postgres.py:302-303) and the Presto family —
+// presto/trino/athena (generators/presto.py:289-290). base/mysql/hive have no such override, so
+// they render the parenthesized function-fallback form (CURRENT_TIMESTAMP()/CURRENT_USER()).
+var niladicBareDialects = map[string]bool{"postgres": true, "presto": true, "trino": true, "athena": true}
+
+// currentTimestampSQL renders CurrentTimestamp bare under postgres/presto/trino/athena, else via
+// the parenthesized function fallback (CURRENT_TIMESTAMP([...])). Since the shared parser now
+// resolves the bare CURRENT_TIMESTAMP keyword for every dialect via the base NO_PAREN_FUNCTIONS
+// map, this per-dialect gating is what keeps each dialect's round-trip byte-identical to upstream.
+func (g *Generator) currentTimestampSQL(e expressions.Expression) string {
+	if niladicBareDialects[g.dialect.Name] {
+		return "CURRENT_TIMESTAMP"
+	}
+	return g.functionFallbackSQL(e)
+}
+
+// currentUserSQL renders CurrentUser bare under postgres/presto/trino/athena; base/mysql/hive
+// render CURRENT_USER() via the function fallback.
+func (g *Generator) currentUserSQL(e expressions.Expression) string {
+	if niladicBareDialects[g.dialect.Name] {
+		return "CURRENT_USER"
+	}
+	return g.functionFallbackSQL(e)
+}
+
+// currentCatalogSQL renders the bare CURRENT_CATALOG keyword (generator.py:171
+// `exp.CurrentCatalog: lambda *_: "CURRENT_CATALOG"`), dialect-agnostic.
+func (g *Generator) currentCatalogSQL(_ expressions.Expression) string {
+	return "CURRENT_CATALOG"
+}
+
+// sessionUserSQL renders bare SESSION_USER (generator.py:172); mysql renders the parenthesized
+// SESSION_USER() (generators/mysql.py:204). In this port only postgres builds SessionUser from a
+// bare keyword (its NoParenFunctions override); the mysql arm covers the SESSION_USER() call form.
+func (g *Generator) sessionUserSQL(_ expressions.Expression) string {
+	if g.dialect.Name == "mysql" {
+		return "SESSION_USER()"
+	}
+	return "SESSION_USER"
+}
+
+// localtimeSQL / localtimestampSQL port generator.py:6174-6180: bare LOCALTIME/LOCALTIMESTAMP
+// when there is no precision arg, else the parenthesized form. Dialect-agnostic (postgres and
+// mysql both wire these into NO_PAREN_FUNCTIONS).
+func (g *Generator) localtimeSQL(e expressions.Expression) string {
+	if g.sqlKey(e, "this") != "" {
+		return g.funcCall("LOCALTIME", []any{e.Arg("this")}, "(", ")", true)
+	}
+	return "LOCALTIME"
+}
+
+func (g *Generator) localtimestampSQL(e expressions.Expression) string {
+	if g.sqlKey(e, "this") != "" {
+		return g.funcCall("LOCALTIMESTAMP", []any{e.Arg("this")}, "(", ")", true)
+	}
+	return "LOCALTIMESTAMP"
 }
 
 // strPositionSQL ports dialects/dialect.py:1281-1321 `strposition_sql`, specialized to the
@@ -128,4 +197,10 @@ func init() {
 	dispatch[expressions.KindOverlay] = (*Generator).overlaySQL
 	dispatch[expressions.KindVariadic] = (*Generator).variadicSQL
 	dispatch[expressions.KindCurrentDate] = (*Generator).currentDateSQL
+	dispatch[expressions.KindCurrentTimestamp] = (*Generator).currentTimestampSQL
+	dispatch[expressions.KindCurrentUser] = (*Generator).currentUserSQL
+	dispatch[expressions.KindCurrentCatalog] = (*Generator).currentCatalogSQL
+	dispatch[expressions.KindSessionUser] = (*Generator).sessionUserSQL
+	dispatch[expressions.KindLocaltime] = (*Generator).localtimeSQL
+	dispatch[expressions.KindLocaltimestamp] = (*Generator).localtimestampSQL
 }

@@ -45,7 +45,17 @@ func TestTrinoRefreshAndNoParenFunctions(t *testing.T) {
 	if catalog.Kind() != exp.KindCurrentCatalog {
 		t.Fatalf("CURRENT_CATALOG kind = %v, want CurrentCatalog:\n%s", catalog.Kind(), catalog.ToS())
 	}
-	for _, dialect := range []string{"", "mysql", "postgres", "presto", "hive"} {
+	// The default dialect (BaseParser, parsers/base.py:8-13) and Postgres (parsers/postgres.py:
+	// 145-152) also resolve bare CURRENT_CATALOG to CurrentCatalog via their own NO_PAREN_FUNCTIONS
+	// — token-level overrides independent of the Trino name-based parser. MySQL keeps it a bare
+	// Column, and presto/hive are not wired for it here, so the Trino parser must not leak there.
+	for _, dialect := range []string{"", "postgres"} {
+		root := parseOneDialect(t, "SELECT CURRENT_CATALOG", dialect)
+		if projection := root.Expressions()[0]; projection.Kind() != exp.KindCurrentCatalog {
+			t.Fatalf("%q CURRENT_CATALOG kind = %v, want CurrentCatalog:\n%s", dialect, projection.Kind(), root.ToS())
+		}
+	}
+	for _, dialect := range []string{"mysql", "presto", "hive"} {
 		root := parseOneDialect(t, "SELECT CURRENT_CATALOG", dialect)
 		if projection := root.Expressions()[0]; projection.Kind() == exp.KindCurrentCatalog {
 			t.Fatalf("Trino CURRENT_CATALOG parser leaked to %q:\n%s", dialect, root.ToS())

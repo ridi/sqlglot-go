@@ -2477,6 +2477,21 @@ func isPGStringConstantToken(tt tokens.TokenType) bool {
 	return false
 }
 
+// deferNiladicToPGTypedLiteral reports whether a bare niladic keyword should NOT be resolved as a
+// no-paren function here, so the pg-user-type-typed-literal path can fold it instead. CURRENT_SCHEMA
+// is the one Postgres niladic that is ALSO a non-reserved keyword usable as an unquoted type name:
+// real Postgres parses `current_schema` bare as the function (-> 'public') but `current_schema 'x'`
+// as a typed literal (errors with `type "current_schema" does not exist`, the same class as
+// `type 'x'`/`format 'x'`), whereas every other niladic (current_user/session_user/current_catalog/
+// current_timestamp/localtime/...) is reserved and yields a `syntax error at or near "'x'"` in that
+// position. So only CURRENT_SCHEMA, and only when a string constant immediately follows, defers to
+// the type-name path; a bare `current_schema` still builds CurrentSchema.
+func (p *Parser) deferNiladicToPGTypedLiteral(tokenType tokens.TokenType) bool {
+	return p.dialect.Name == "postgres" &&
+		tokenType == tokens.CURRENT_SCHEMA &&
+		isPGStringConstantToken(p.next.TokenType)
+}
+
 // parsePGTypedLiteralValue parses a SINGLE Postgres string constant (no adjacent-string concat: PG
 // rejects `a.b 'x' 'y'`). parseString handles every form except the escape string `E'…'`
 // (BYTE_STRING), which goes through parsePrimary — which does not adjacent-concat a non-STRING token.
@@ -2856,13 +2871,12 @@ func (p *Parser) parseFunctionCall(functions map[string]func([]exp.Expression) e
 		return p.parseWindow(parser(p), false)
 	}
 	if p.next.TokenType != tokens.L_PAREN {
-		// NO_PAREN_FUNCTIONS (parser.py:6973-6975): a bare CURRENT_DATE/CURRENT_TIME keyword
-		// (no trailing "(", not after a DOT) builds the corresponding zero-arg node, e.g.
-		// postgres `date_add(current_date, ...)` -> CurrentDate rendering CURRENT_DATE. Only
-		// shared tokens whose Kinds this port models are wired in noParenFunctions, with
-		// dialect-local additions resolved by noParenFunctionFor. CURRENT_TIMESTAMP/USER/ROLE
-		// keep falling through to a bare column, which already round-trips for base/mysql/postgres.
-		if optionalParens && !afterDot {
+		// NO_PAREN_FUNCTIONS (parser.py:6973-6975): a bare CURRENT_DATE/CURRENT_TIMESTAMP/
+		// CURRENT_USER/... keyword (no trailing "(", not after a DOT) builds the corresponding
+		// zero-arg node, e.g. postgres `date_add(current_date, ...)` -> CurrentDate. The full base
+		// set plus each dialect's additions (postgres LOCALTIME/LOCALTIMESTAMP/CURRENT_CATALOG/
+		// SESSION_USER/CURRENT_SCHEMA, mysql LOCALTIME/LOCALTIMESTAMP) resolve via noParenFunctionFor.
+		if optionalParens && !afterDot && !p.deferNiladicToPGTypedLiteral(tokenType) {
 			if build := p.noParenFunctionFor(tokenType); build != nil {
 				p.advance()
 				return p.expression(build(exp.Args{}), &token, comments)
@@ -3436,18 +3450,24 @@ func (p *Parser) parseWindowSpec() map[string]any {
 
 var noParenFunctionParsers map[string]func(*Parser) exp.Expression
 
-// noParenFunctions ports NO_PAREN_FUNCTIONS (parser.py:431-439): keyword tokens that, when
-// not followed by "(", build a zero-arg function node. Only the subset whose Kinds this port
-// models is included - CurrentDate (CURRENT_DATE/CURRENT_DATETIME) and CurrentTime
-// (CURRENT_TIME); CURRENT_TIMESTAMP/CURRENT_USER/CURRENT_ROLE are omitted (no
-// CurrentTimestamp/CurrentUser/CurrentRole Kind yet), still parsing as bare columns which
-// round-trip unchanged for base/mysql/postgres. currentDateSQL renders CurrentDate without the
-// empty parens the generic fallback would emit; CurrentTime keeps the parenthesized fallback,
-// matching upstream (currentdate_sql exists, currenttime_sql does not).
+// noParenFunctions ports the base NO_PAREN_FUNCTIONS (parser.py:431-438): keyword tokens that,
+// when not followed by "(", build a zero-arg function node. This is the full base set of six.
+// Postgres and MySQL add their own entries (LOCALTIME/LOCALTIMESTAMP, plus postgres's
+// CURRENT_CATALOG/SESSION_USER/CURRENT_SCHEMA) via each dialect's NoParenFunctions override
+// (parsers/postgres.py:145-152, parsers/mysql.py:55-59), resolved by noParenFunctionFor.
+// CURRENT_ROLE is included for base fidelity but is effectively dead in base/mysql/postgres:
+// none of those tokenizers emit a CURRENT_ROLE token ("CURRENT_ROLE" lexes as VAR), so bare
+// current_role stays a Column, matching upstream. Rendering: currentDateSQL/localtimeSQL/etc.
+// render the bare (no-paren) keyword where upstream does; CurrentTimestamp/CurrentUser keep the
+// parenthesized functionFallback for base/mysql (CURRENT_TIMESTAMP()) and render bare only under
+// the postgres generator override, matching upstream's per-dialect transforms.
 var noParenFunctions = map[tokens.TokenType]func(exp.Args) exp.Expression{
-	tokens.CURRENT_DATE:     exp.CurrentDate,
-	tokens.CURRENT_DATETIME: exp.CurrentDate,
-	tokens.CURRENT_TIME:     exp.CurrentTime,
+	tokens.CURRENT_DATE:      exp.CurrentDate,
+	tokens.CURRENT_DATETIME:  exp.CurrentDate,
+	tokens.CURRENT_TIME:      exp.CurrentTime,
+	tokens.CURRENT_TIMESTAMP: exp.CurrentTimestamp,
+	tokens.CURRENT_USER:      exp.CurrentUser,
+	tokens.CURRENT_ROLE:      exp.CurrentRole,
 }
 
 var subqueryPredicates = map[tokens.TokenType]func(exp.Args) exp.Expression{
