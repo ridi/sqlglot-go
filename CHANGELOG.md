@@ -18,6 +18,13 @@ merged, tags the version and publishes the GitHub release. See
 [AGENTS.md § Releasing](./AGENTS.md#releasing). Entries for **v0.5.0 and earlier** were written by hand
 before release-please was adopted.
 
+## [0.12.0](https://github.com/ridi-oss/sqlglot-go/compare/v0.11.0...v0.12.0) (2026-07-22)
+
+
+### Features
+
+* **mysql:** structurally parse SELECT ... INTO OUTFILE/DUMPFILE ([#35](https://github.com/ridi-oss/sqlglot-go/issues/35)) ([954c202](https://github.com/ridi-oss/sqlglot-go/commit/954c2029f1085a55584106b260c59d289a8d463d))
+
 ## [0.11.0](https://github.com/ridi-oss/sqlglot-go/compare/v0.10.0...v0.11.0) (2026-07-22)
 
 
