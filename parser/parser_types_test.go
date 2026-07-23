@@ -388,3 +388,171 @@ func TestParseUserDefinedType(t *testing.T) {
 		t.Fatalf("mysql CAST to an unrecognized type name should error (SUPPORTS_USER_DEFINED_TYPES=false)")
 	}
 }
+
+// TestParsePgCatalogBuiltinType covers the DEVIATIONS §1.10 correctness divergence: for
+// Postgres, a `pg_catalog.<name>` qualifier whose tail is a REAL pg_catalog type name resolves
+// to the exact node the bare `<name>` spelling produces (a builtin DataType, an ObjectIdentifier
+// for oid/reg*, or a PseudoType for cstring), instead of the USER-DEFINED node pinned upstream
+// leaves it as. pg_catalog is PostgreSQL's system schema, so `pg_catalog.int4` IS `int4`
+// (verified against PG 17.6: pg_typeof('5'::pg_catalog.int4) = pg_typeof('5'::int4) = integer).
+// Membership is keyed on the pinned pg_catalog name set, NOT generic keyword recognition, so
+// tokenizer aliases that are not pg_catalog names (integer/bigint/tinyint/...) stay USER-DEFINED,
+// matching real PG (which rejects `pg_catalog.integer` etc.).
+func TestParsePgCatalogBuiltinType(t *testing.T) {
+	isUserDefined := func(to exp.Expression) bool {
+		return to.Kind() == exp.KindDataType && to.Arg("this") == exp.DTypeUserDefined
+	}
+	// assertResolves parses both `::` and CAST(... AS ...) spellings of `pg_catalog.<qualTail>`
+	// under postgres and asserts the `to` node is (a) not USER-DEFINED and (b) byte-identical to
+	// the bare `<bareTail>` node (same DataType / ObjectIdentifier / PseudoType).
+	assertResolves := func(t *testing.T, qualTail, bareTail string) {
+		t.Helper()
+		bareTo := exprArg(t, parseOneDialect(t, "SELECT '5'::"+bareTail, "postgres").Expressions()[0], "to")
+		if isUserDefined(bareTo) {
+			t.Fatalf("test setup: bare `%s` is USER-DEFINED, cannot assert resolution", bareTail)
+		}
+		for _, sql := range []string{
+			"SELECT '5'::pg_catalog." + qualTail,
+			"SELECT CAST('5' AS pg_catalog." + qualTail + ")",
+		} {
+			to := exprArg(t, parseOneDialect(t, sql, "postgres").Expressions()[0], "to")
+			if isUserDefined(to) {
+				t.Fatalf("%s: still USER-DEFINED, want the bare `%s` node", sql, bareTail)
+			}
+			if !to.Equal(bareTo) {
+				t.Fatalf("%s: resolved node\n%s\ndiffers from bare `%s`\n%s", sql, to.ToS(), bareTail, bareTo.ToS())
+			}
+		}
+	}
+
+	// Real pg_catalog names resolve to the same node bare spelling produces: builtin DataTypes
+	// (int4->INT, int8->BIGINT, int2->SMALLINT, bool->BOOLEAN, numeric->DECIMAL, float8->DOUBLE,
+	// name, money, ...), ObjectIdentifiers (oid/regclass/regproc/regtype), and a PseudoType
+	// (cstring). No hardcoded DType list here - each is checked against the bare form directly.
+	for _, tail := range []string{
+		"int4", "int8", "int2", "bool", "numeric", "text", "varchar", "timestamptz",
+		"float8", "name", "money", // builtin DataTypes
+		"int4multirange", "int8multirange", "datemultirange", // multirange DataTypes (typtype 'm')
+		"nummultirange", "tsmultirange", "tstzmultirange", //   — real PG accepts pg_catalog.<name>
+		"oid", "regclass", "regproc", "regtype", // ObjectIdentifiers
+		"cstring", // PseudoType
+	} {
+		assertResolves(t, tail, tail)
+	}
+	// A quoted-but-already-lowercase tail is the same catalog name (real PG:
+	// pg_typeof('5'::pg_catalog."int4") = integer), so it resolves to the bare `int4` node.
+	assertResolves(t, `"int4"`, "int4")
+	// An unquoted mixed-case tail folds ASCII-only (stringsLower, per DEVIATIONS §1.1) to the catalog
+	// name. Real PG accepts `pg_catalog.unKnown` (its identifier folding is ASCII-only and `unknown`
+	// is a real type), so it resolves to the bare `unknown` node — the fold must NOT diverge from PG.
+	assertResolves(t, "unKnown", "unknown")
+
+	// Schema folding: unquoted `PG_CATALOG` folds to the system schema; a quoted all-lowercase
+	// `"pg_catalog"` is literally pg_catalog. Both resolve.
+	for _, sql := range []string{
+		"SELECT '5'::PG_CATALOG.int4",
+		`SELECT '5'::"pg_catalog".int4`,
+	} {
+		to := exprArg(t, parseOneDialect(t, sql, "postgres").Expressions()[0], "to")
+		if !exp.IsType(to, exp.DTypeInt) {
+			t.Fatalf("%s: to = %s, want INT", sql, to.ToS())
+		}
+	}
+
+	// Stays USER-DEFINED (must NOT resolve). Real PG rejects every one of these as a type:
+	//   - tokenizer aliases that are NOT pg_catalog names (the catalog names are int4/int8/...)
+	//   - a genuine unknown user type, and a builtin name under a non-system schema
+	//   - a quoted case-MISMATCHED tail/schema (case-sensitive, so not the lowercase catalog)
+	//   - a three-part name (pg_catalog is not the immediate qualifier)
+	// Each verified against PG 17.6 (`SELECT NULL::<x>` -> "type ... does not exist").
+	for _, sql := range []string{
+		"SELECT '5'::pg_catalog.integer",     // grammar alias, not a catalog name
+		"SELECT '5'::pg_catalog.bigint",      // grammar alias
+		"SELECT '5'::pg_catalog.boolean",     // grammar alias
+		"SELECT '5'::pg_catalog.decimal",     // grammar alias
+		"SELECT '5'::pg_catalog.smallint",    // grammar alias
+		"SELECT '5'::pg_catalog.real",        // grammar alias (catalog name is float4)
+		"SELECT '5'::pg_catalog.double",      // grammar-alias fragment (catalog name is float8)
+		"SELECT '5'::pg_catalog.serial",      // pseudo-type alias, not a real type
+		"SELECT '5'::pg_catalog.bigserial",   // pseudo-type alias
+		"SELECT '5'::pg_catalog.smallserial", // pseudo-type alias
+		"SELECT '5'::pg_catalog.tinyint",     // other-dialect type
+		"SELECT '5'::pg_catalog.mediumint",   // other-dialect type
+		"SELECT '5'::pg_catalog.datetime",    // other-dialect type
+		"SELECT '5'::pg_catalog.nvarchar",    // other-dialect type
+		"SELECT '5'::pg_catalog.hstore",      // extension type, not pg_catalog
+		"SELECT '5'::pg_catalog.geography",   // extension type, not pg_catalog
+		"SELECT '5'::pg_catalog.myt",         // unknown user type
+		`SELECT '5'::pg_catalog."INT4"`,      // quoted upper tail: case-sensitive, not the catalog name
+		`SELECT '5'::"PG_CATALOG".int4`,      // quoted upper schema: not the system schema
+		"SELECT '5'::public.myt",             // genuine user type
+		"SELECT '5'::myschema.int4",          // builtin name under a non-system schema
+		"SELECT '5'::a.pg_catalog.int4",      // three-part: pg_catalog not the immediate qualifier
+		"SELECT CAST('5' AS public.myt)",     // CAST spelling, other schema
+		"SELECT '5'::pg_catalog.macaddr",     // real pg_catalog name the port does not model
+		"SELECT '5'::pg_catalog.varbit",      // real pg_catalog name the port does not model
+		"SELECT '5'::pg_catalog.tsvector",    // real pg_catalog name the port does not model
+	} {
+		to := exprArg(t, parseOneDialect(t, sql, "postgres").Expressions()[0], "to")
+		if !isUserDefined(to) {
+			t.Fatalf("%s: to = %s, want USER-DEFINED (must not resolve)", sql, to.ToS())
+		}
+	}
+
+	// char and bit are REAL pg_catalog names but their bare SQL spelling is a semantically different
+	// type, so they must stay USER-DEFINED (resolving would silently change the type; see
+	// pgCatalogSemanticMismatch). Verified against PG 17.6: `65::pg_catalog.char` = 'A' (1-byte
+	// "char", OID 18) vs `65::char` = '6' (character(1)); `'101'::pg_catalog.bit` = '101' vs
+	// `'101'::bit` = '1' (bare BIT is bit(1)). They round-trip with the qualifier preserved.
+	for _, tc := range []struct{ sql, want string }{
+		{"SELECT '65'::pg_catalog.char", "SELECT CAST('65' AS pg_catalog.char)"},
+		{"SELECT '101'::pg_catalog.bit", "SELECT CAST('101' AS pg_catalog.bit)"},
+	} {
+		to := exprArg(t, parseOneDialect(t, tc.sql, "postgres").Expressions()[0], "to")
+		if !isUserDefined(to) {
+			t.Fatalf("%s: to = %s, want USER-DEFINED (semantic mismatch, must not resolve)", tc.sql, to.ToS())
+		}
+		if got, err := generateSQL(t, parseOneDialect(t, tc.sql, "postgres"), "postgres"); err != nil || got != tc.want {
+			t.Fatalf("%s: round-trip = %q (err %v), want %q", tc.sql, got, err, tc.want)
+		}
+	}
+
+	// oid/reg*/cstring never take a type modifier (real PG rejects `pg_catalog.oid(5)` with "type
+	// modifier is not allowed"), and their ObjectIdentifier/PseudoType node cannot carry one — so a
+	// trailing (...) keeps the name USER-DEFINED, preserving the modifier on round-trip instead of
+	// silently dropping it (the DataType path applies modifiers normally, e.g. numeric(10,2)).
+	for _, tc := range []struct{ sql, want string }{
+		{"SELECT '5'::pg_catalog.oid(5)", "SELECT CAST('5' AS pg_catalog.oid(5))"},
+		{"SELECT '5'::pg_catalog.regclass(5)", "SELECT CAST('5' AS pg_catalog.regclass(5))"},
+		{"SELECT '5'::pg_catalog.cstring(5)", "SELECT CAST('5' AS pg_catalog.cstring(5))"},
+	} {
+		to := exprArg(t, parseOneDialect(t, tc.sql, "postgres").Expressions()[0], "to")
+		if !isUserDefined(to) {
+			t.Fatalf("%s: to = %s, want USER-DEFINED (modifier must not be dropped)", tc.sql, to.ToS())
+		}
+		if got, err := generateSQL(t, parseOneDialect(t, tc.sql, "postgres"), "postgres"); err != nil || got != tc.want {
+			t.Fatalf("%s: round-trip = %q (err %v), want %q (modifier preserved)", tc.sql, got, err, tc.want)
+		}
+	}
+
+	// A pg_catalog name the port does not model as a builtin keeps its schema qualifier (it must
+	// not be silently rewritten to the bare, unqualified USER-DEFINED name).
+	macTo := exprArg(t, parseOneDialect(t, "SELECT '5'::pg_catalog.macaddr", "postgres").Expressions()[0], "to")
+	if _, isExpr := macTo.Arg("kind").(exp.Expression); !isExpr {
+		t.Fatalf("pg_catalog.macaddr should keep a qualified Dot kind:\n%s", macTo.ToS())
+	}
+	if got, err := generateSQL(t, parseOneDialect(t, "SELECT '5'::pg_catalog.macaddr", "postgres"), "postgres"); err != nil || got != "SELECT CAST('5' AS pg_catalog.macaddr)" {
+		t.Fatalf("pg_catalog.macaddr round-trip = %q (err %v), want the qualified spelling", got, err)
+	}
+
+	// Base and MySQL are unaffected (no pg_catalog concept). Base still folds the dotted name
+	// into a plain-string USER-DEFINED kind; MySQL (SUPPORTS_USER_DEFINED_TYPES=false) errors
+	// on the dotted type name rather than resolving it.
+	baseTo := exprArg(t, parseOne(t, "SELECT CAST('5' AS pg_catalog.int4)").Expressions()[0], "to")
+	if !exp.IsType(baseTo, exp.DTypeUserDefined) || baseTo.Arg("kind") != "pg_catalog.int4" {
+		t.Fatalf("base pg_catalog.int4 should stay USER-DEFINED with a plain-string kind:\n%s", baseTo.ToS())
+	}
+	if _, err := sqlglot.ParseOne("SELECT CAST('5' AS pg_catalog.int4)", "mysql"); err == nil {
+		t.Fatalf("mysql CAST to pg_catalog.int4 should error (SUPPORTS_USER_DEFINED_TYPES=false)")
+	}
+}

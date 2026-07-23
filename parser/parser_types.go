@@ -1,6 +1,8 @@
 package parser
 
 import (
+	"strings"
+
 	exp "github.com/ridi-oss/sqlglot-go/expressions"
 	"github.com/ridi-oss/sqlglot-go/tokens"
 )
@@ -33,6 +35,17 @@ func (p *Parser) parseUserDefinedType(identifier exp.Expression) exp.Expression 
 				udtType = p.expression(exp.Dot(exp.Args{"this": udtType, "expression": part}), nil, nil)
 			}
 		}
+		// divergence (DEVIATIONS §1.10): `pg_catalog.<builtin>` IS the builtin. pg_catalog is
+		// PostgreSQL's system schema, so `pg_catalog.int4` is definitionally `int4` (real PG
+		// 17.6: pg_typeof('5'::pg_catalog.int4) = pg_typeof('5'::int4) = integer). Resolve a
+		// pg_catalog-qualified real builtin to the same node the bare spelling produces, so a
+		// consumer classifying the cast target sees the builtin. Pinned upstream is
+		// over-conservative here (leaves it USER-DEFINED). A tail that is not a real pg_catalog
+		// name (`pg_catalog.myt`, `pg_catalog.integer`) or any other schema (`public.myt`,
+		// `myschema.int4`) stays USER-DEFINED, matching real PG.
+		if builtin := p.resolvePgCatalogBuiltin(udtType); builtin != nil {
+			return builtin
+		}
 		result, err := exp.DataTypeBuild(udtType, "", true, false, nil)
 		if err != nil {
 			return nil
@@ -51,6 +64,137 @@ func (p *Parser) parseUserDefinedType(identifier exp.Expression) exp.Expression 
 		return nil
 	}
 	return result
+}
+
+// pgCatalogTypeNames is the pinned set of real PostgreSQL `pg_catalog` type names — the
+// authoritative source of truth for the §1.10 divergence. It is the base/pseudo/range/multirange
+// type set (typtype in b/p/r/m, non-array) of pg_catalog, captured from PostgreSQL 17.6:
+//
+//	SELECT typname FROM pg_type t JOIN pg_namespace n ON n.oid = t.typnamespace
+//	WHERE n.nspname = 'pg_catalog' AND t.typtype IN ('b','p','r','m') AND typname NOT LIKE '\_%';
+//
+// Membership here — NOT the type parser's generic keyword recognition — decides whether a
+// `pg_catalog.<name>` qualifier names a real builtin. The tokenizer knows many aliases that are
+// NOT pg_catalog names (`integer`/`bigint`/`boolean`/`decimal`/`smallint`/`real`/`double` are
+// grammar spellings; `tinyint`/`datetime`/`mediumint`/`nvarchar` are other dialects'), and real
+// PG rejects `pg_catalog.integer`, `pg_catalog.tinyint`, etc. — the catalog names are
+// `int4`/`int8`/`bool`/`numeric`/`int2`/`float4`/`float8`, not their aliases. Keying on this
+// list avoids that false-resolution.
+var pgCatalogTypeNames = func() map[string]struct{} {
+	names := strings.Fields(`
+		aclitem any anyarray anycompatible anycompatiblearray anycompatiblemultirange
+		anycompatiblenonarray anycompatiblerange anyelement anyenum anymultirange anynonarray
+		anyrange bit bool box bpchar bytea char cid cidr circle cstring date daterange
+		datemultirange event_trigger fdw_handler float4 float8 gtsvector index_am_handler inet int2
+		int2vector int4 int4range int4multirange int8 int8range int8multirange internal interval
+		json jsonb jsonpath language_handler line lseg macaddr macaddr8 money name numeric numrange
+		nummultirange oid oidvector path pg_brin_bloom_summary pg_brin_minmax_multi_summary
+		pg_ddl_command pg_dependencies pg_lsn pg_mcv_list pg_ndistinct pg_node_tree pg_snapshot point
+		polygon record refcursor regclass regcollation regconfig regdictionary regnamespace regoper
+		regoperator regproc regprocedure regrole regtype table_am_handler text tid time timestamp
+		timestamptz timetz trigger tsm_handler tsmultirange tsquery tsrange tstzrange tstzmultirange
+		tsvector txid_snapshot unknown uuid varbit varchar void xid xid8 xml`)
+	set := make(map[string]struct{}, len(names))
+	for _, n := range names {
+		set[n] = struct{}{}
+	}
+	return set
+}()
+
+// pgCatalogSemanticMismatch are real pg_catalog names that ARE modeled as a bare builtin but whose
+// bare SQL spelling is NOT the same type, so resolving them would silently change semantics — they
+// stay USER-DEFINED instead (verified against PostgreSQL 17.6):
+//   - char: `pg_catalog.char` is the 1-byte "char" (OID 18); the bare CHAR keyword is character(1)
+//     / bpchar (OID 1042) — a different type (`65::pg_catalog.char` = 'A', `65::char` = '6').
+//   - bit:  `pg_catalog.bit` has no implicit length; the bare BIT keyword is bit(1), which truncates
+//     (`'101'::pg_catalog.bit` = '101', `'101'::bit` = '1').
+//
+// Both remain in pgCatalogTypeNames (they are real pg_catalog names) but are excluded here so the
+// qualified form round-trips losslessly as USER-DEFINED, matching upstream's conservative behavior.
+var pgCatalogSemanticMismatch = map[string]struct{}{
+	"char": {},
+	"bit":  {},
+}
+
+// resolvePgCatalogBuiltin implements the DEVIATIONS §1.10 correctness divergence (postgres
+// only): a two-part `pg_catalog.<name>` type name whose tail is a real pg_catalog builtin is
+// returned as the exact node the bare `<name>` spelling produces — a builtin DataType
+// (int4->INT, int8->BIGINT, ...), an ObjectIdentifier (oid, regclass, reg*), or a PseudoType
+// (cstring) — instead of the USER-DEFINED node upstream leaves it as. Membership is decided by
+// the pinned pgCatalogTypeNames set (real pg_catalog names), not the type parser's generic
+// keyword recognition, so tokenizer aliases that are not pg_catalog names (`integer`, `tinyint`,
+// `nvarchar`, ...) stay USER-DEFINED — matching real PG, which rejects `pg_catalog.integer` etc.
+//
+// Returns nil (caller keeps the USER-DEFINED build) when: the type name is not a two-part Dot
+// (a 3-part `a.pg_catalog.int4` stays USER-DEFINED); the schema part is not `pg_catalog` under
+// PG's identifier folding; the tail (folded the same way) is not in the pinned set; or the tail
+// is a real pg_catalog name the port does not model as a builtin (e.g. `macaddr`/`varbit`, which
+// resolve back to USER-DEFINED) — those keep the qualified USER-DEFINED so the schema qualifier
+// is preserved.
+func (p *Parser) resolvePgCatalogBuiltin(udtType exp.Expression) exp.Expression {
+	if udtType == nil || udtType.Kind() != exp.KindDot {
+		return nil
+	}
+	schema := udtType.This()
+	tail := udtType.Expr()
+	if schema == nil || tail == nil ||
+		schema.Kind() != exp.KindIdentifier || tail.Kind() != exp.KindIdentifier {
+		return nil
+	}
+	// The schema part must be `pg_catalog` under PostgreSQL's identifier folding: an unquoted
+	// name folds to lowercase (so `PG_CATALOG` is the system schema), but a quoted name is
+	// literal (`"PG_CATALOG"` is a different, case-sensitive schema that real PG rejects here).
+	if schemaQuoted, _ := schema.Arg("quoted").(bool); schemaQuoted {
+		if schema.Name() != "pg_catalog" {
+			return nil
+		}
+	} else if !strings.EqualFold(schema.Name(), "pg_catalog") {
+		return nil
+	}
+	// Fold the tail the same way PG does: an unquoted name folds to lowercase; a quoted name is
+	// literal, so `pg_catalog."int4"` (already lowercase) matches the catalog name but
+	// `pg_catalog."INT4"` does not (real PG rejects the latter — "type does not exist").
+	name := tail.Name()
+	if tailQuoted, _ := tail.Arg("quoted").(bool); !tailQuoted {
+		// ASCII-only fold (stringsLower), matching PostgreSQL's identifier folding rather than Go's
+		// full-Unicode strings.ToLower — see DEVIATIONS §1.1. For the all-ASCII catalog names this is
+		// identical to strings.ToLower, but it will not over-fold a non-ASCII spelling PG rejects.
+		name = stringsLower(name)
+	}
+	if _, ok := pgCatalogTypeNames[name]; !ok {
+		return nil
+	}
+	// A real pg_catalog name whose bare spelling is a semantically different type (char, bit) stays
+	// USER-DEFINED — resolving it would silently change the type (see pgCatalogSemanticMismatch).
+	if _, mismatch := pgCatalogSemanticMismatch[name]; mismatch {
+		return nil
+	}
+	// Route the folded name through the same bare-type resolution `int4`/`oid`/`cstring` take,
+	// and return whatever node it yields: a builtin DataType, an ObjectIdentifier (oid/reg*), or
+	// a PseudoType (cstring). If the port does not model this pg_catalog type as a builtin (the
+	// tail resolves back to a USER-DEFINED DataType, e.g. `macaddr`/`varbit`), keep the qualified
+	// name USER-DEFINED so the schema qualifier is preserved.
+	built, err := exp.DataTypeBuild(name, p.dialect.Name, false, false, nil)
+	if err != nil || built == nil {
+		return nil
+	}
+	switch built.Kind() {
+	case exp.KindObjectIdentifier, exp.KindPseudoType:
+		// oid/reg*/cstring never take a type modifier (real PG: `pg_catalog.oid(5)` -> "type modifier
+		// is not allowed for type"). A pending `(` here is such a modifier; since ObjectIdentifier /
+		// PseudoType cannot carry `expressions`, the trailing (...) parseTypesBase would attach is
+		// silently dropped on output. Keep the qualified name USER-DEFINED instead, so the modifier is
+		// preserved on round-trip and an engine-invalid form is not laundered into a valid-looking one.
+		if p.curr.TokenType == tokens.L_PAREN {
+			return nil
+		}
+		return built
+	case exp.KindDataType:
+		if built.Arg("this") != exp.DTypeUserDefined {
+			return built
+		}
+	}
+	return nil
 }
 
 func (p *Parser) parseTypes(checkFunc, schema, allowIdentifiers, withCollation bool) exp.Expression {

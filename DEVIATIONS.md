@@ -375,6 +375,88 @@ wraps the no-`AS` string fallback in `_parse_table_alias`; the `AS` form goes th
 `advanceAny` path (which absorbs any token, including a `STRING`, whenever `AS` was matched) and is unchanged
 here, matching pinned upstream even though real PG/MySQL reject it. A follow-up could gate that path too.
 
+### 1.10 Postgres `pg_catalog.<builtin>` resolves to the builtin node (not USER-DEFINED)
+
+**What upstream does:** pinned sqlglot v30.12.0 parses a schema-qualified Postgres type name whose schema is
+`pg_catalog` and whose tail is a builtin as a **USER-DEFINED** `DataType` — `CAST('5' AS pg_catalog.int4)`
+and `'5'::pg_catalog.int4` both become `DataType(this=USERDEFINED, kind=Dot(pg_catalog, int4))`. Verified on
+the pinned reference for `pg_catalog.int4`/`text`/`timestamptz`/`bool`/`float8` (all USER-DEFINED). The bare
+spelling `'5'::int4` already resolves to `DataType(this=INT)` because the tokenizer keyword-maps `int4`→`INT`.
+
+**What sqlglot-go does:** for **Postgres only**, a two-part `pg_catalog.<name>` type name whose `<name>` is a
+**real pg_catalog type name** resolves to the *exact node the bare `<name>` spelling produces* (byte-identical,
+verified with `.Equal`): a builtin `DataType` (`pg_catalog.int4` → `INT`, `int8` → `BIGINT`, `int2` →
+`SMALLINT`, `bool` → `BOOLEAN`, `numeric` → `DECIMAL`, `float8` → `DOUBLE`, `text`, `varchar`, `timestamptz`,
+`name`, `money`, the six multiranges `int4multirange`/`int8multirange`/`datemultirange`/`nummultirange`/
+`tsmultirange`/`tstzmultirange`, …), an **`ObjectIdentifier`** (`pg_catalog.oid`/`regclass`/`regproc`/
+`regtype`/… — the `OBJECT_IDENTIFIER` family), or a **`PseudoType`** (`pg_catalog.cstring`). Both cast
+spellings are covered (`CAST(x AS pg_catalog.int4)` and `x::pg_catalog.int4`), and array/collation suffixes
+compose exactly as for the bare builtin.
+
+Membership is decided by a **pinned allowlist of the real `pg_catalog` type names** (the base/pseudo/range/
+multirange type set, captured from PostgreSQL 17.6 via `pg_type ⋈ pg_namespace WHERE nspname='pg_catalog' AND
+typtype IN ('b','p','r','m')`), **not** by the type parser's generic keyword recognition. That distinction is
+the whole point:
+the tokenizer knows many spellings that are **not** `pg_catalog` type names — the SQL-standard grammar aliases
+`integer`/`bigint`/`boolean`/`decimal`/`smallint`/`real`/`double` (the catalog names are
+`int4`/`int8`/`bool`/`numeric`/`int2`/`float4`/`float8`) and other dialects' `tinyint`/`datetime`/`mediumint`/
+`nvarchar` — and real PG **rejects** `pg_catalog.integer`, `pg_catalog.tinyint`, etc. Keying on the pinned
+catalog set keeps all of those **USER-DEFINED**, so the resolution never claims a builtin PG itself refuses.
+
+**Stays USER-DEFINED** (unchanged): a tail not in the pinned set (an alias like `pg_catalog.integer`/`real`/
+`double`/`bigserial`, an extension type like `pg_catalog.hstore`/`geography`, a genuine user type
+`pg_catalog.myt`); a real `pg_catalog` name the port does not model as a builtin
+(`pg_catalog.macaddr`/`varbit`/`tsvector` — these resolve back to USER-DEFINED and **keep their `pg_catalog.`
+qualifier**, i.e. are not silently rewritten to the bare unqualified name); any other schema (`public.myt`,
+`myschema.int4`); and a three-part name (`a.pg_catalog.int4`).
+
+**Two deliberate non-resolutions** (both stay USER-DEFINED with the qualifier preserved, so they round-trip
+losslessly and match real PG):
+- **`pg_catalog.char` and `pg_catalog.bit`** — real catalog names, but their bare SQL keyword is a *different*
+  type, so resolving would silently change semantics. `pg_catalog.char` is the 1-byte `"char"` (OID 18) whereas
+  the bare `CHAR` keyword is `character(1)`/`bpchar` (OID 1042) — `65::pg_catalog.char` = `'A'` but `65::char`
+  = `'6'`; `pg_catalog.bit` has no implicit length whereas bare `BIT` is `bit(1)` — `'101'::pg_catalog.bit` =
+  `'101'` but `'101'::bit` = `'1'`. Excluded via a small `pgCatalogSemanticMismatch` set. (`pg_catalog.bpchar`
+  and `pg_catalog.varchar` **do** resolve — their bare spellings `BPCHAR`/`VARCHAR` are the same type.)
+- **`pg_catalog.oid(5)` / `regclass(5)` / `cstring(5)`** and the other `ObjectIdentifier`/`PseudoType` names
+  **with a trailing type modifier** — real PG rejects a modifier on these (`type modifier is not allowed for
+  type "pg_catalog.oid"`), and the `ObjectIdentifier`/`PseudoType` node cannot carry `expressions`, so resolving
+  would silently drop the `(5)`. A pending `(` therefore keeps the name USER-DEFINED (which *does* carry the
+  modifier), preserving it on round-trip rather than laundering an engine-invalid form into a valid-looking one.
+  (Modifier-bearing builtin `DataType`s like `pg_catalog.numeric(10,2)` are unaffected — they carry modifiers.)
+
+Quoting is handled
+under PostgreSQL's identifier folding on **both** parts: an unquoted name folds to lowercase — **ASCII-only**
+(`stringsLower`, per §1.1), matching PG's ASCII identifier folding rather than Go's full-Unicode
+`strings.ToLower`, so `pg_catalog.INT4`/`unKnown` resolve (real PG accepts them) but a non-ASCII spelling PG
+rejects is never over-folded into a match — while a quoted name is literal — so
+`pg_catalog."int4"` (already lowercase) **is** `int4` and resolves (real PG: `pg_typeof('5'::pg_catalog."int4")
+= integer`), but `pg_catalog."INT4"` and `"PG_CATALOG".int4` stay USER-DEFINED (case-sensitive, not the
+lowercase catalog name/schema — real PG rejects them). Base and MySQL are untouched: base still folds the
+dotted name into a plain-string USER-DEFINED `kind`, and MySQL (`SUPPORTS_USER_DEFINED_TYPES=false`) errors on
+the dotted type name, exactly as before — neither has a `pg_catalog` concept.
+
+**Why we diverge (correctness):** `pg_catalog` is PostgreSQL's builtin/system schema, so `pg_catalog.<X>` names
+the builtin `<X>`, not a user type — and for the resolved set it is the *same type* as the bare spelling the
+port emits. Verified against PostgreSQL 17.6: `pg_typeof('5'::pg_catalog.int4) = pg_typeof('5'::int4) =
+integer`, and likewise for `int8`/`int2`/`bool`/`numeric`/`float8`/`text`/`varchar`/`timestamptz`/`oid`/
+`cstring`/`name`/`money`/the multiranges; the negatives all error there (`SELECT NULL::pg_catalog.integer` /
+`.tinyint` / `.hstore` / `.real` / `public.myt` → `type … does not exist`), so keeping those USER-DEFINED is
+correct. The equivalence is checked per-name against the bare node, **not** assumed from the `pg_catalog`
+prefix — the two exceptions above (`char`/`bit`, where the bare *keyword* is a different type, and the
+modifier-bearing `oid(5)`/…) show the prefix is not blindly "definitionally the bare spelling"; each resolved
+name is one whose bare rendering PG treats as the identical type. Upstream is over-conservative — it leaves
+the qualified builtin USER-DEFINED, forcing an AST consumer that classifies a cast target by `DataType.this`
+to special-case the `pg_catalog.` prefix. Resolving it structurally lets the consumer read the same builtin
+node regardless of the (semantically identical) spelling. The only §1.10 behavior change is for real catalog
+builtins: `CAST('5' AS pg_catalog.int4)` now renders as `CAST('5' AS INT)` — the same type. No identity-corpus
+case uses a `pg_catalog.`-qualified type name (scanned: none), so nothing in the corpus flips. Implemented in
+`parser/parser_types.go` (the pinned `pgCatalogTypeNames` allowlist + `resolvePgCatalogBuiltin`, called from
+the `parseUserDefinedType` postgres branch); regression test `parser/parser_types_test.go`
+(`TestParsePgCatalogBuiltinType`). No upstream tripwire is needed: upstream already emits a node here (a
+USER-DEFINED `DataType`, not a `Command`/parse error), so this is a §1 correctness divergence, not a
+grammar-extension ledger row — if upstream later resolves it too, the tests still pass.
+
 ---
 
 ## Opt-in behavioral extensions beyond upstream

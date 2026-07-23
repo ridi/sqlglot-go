@@ -3658,3 +3658,17 @@ func stringsUpper(s string) string {
 	}
 	return string(out)
 }
+
+// stringsLower is the ASCII-only lowercasing counterpart of stringsUpper. It case-folds ONLY the
+// ASCII letters A-Z, leaving every other rune untouched — matching PostgreSQL's identifier folding
+// (ASCII-only) rather than Go's full-Unicode strings.ToLower, per DEVIATIONS §1.1. Use it wherever
+// an unquoted SQL identifier is folded for comparison against a fixed set of ASCII names.
+func stringsLower(s string) string {
+	out := []rune(s)
+	for i, r := range out {
+		if r >= 'A' && r <= 'Z' {
+			out[i] = r + ('a' - 'A')
+		}
+	}
+	return string(out)
+}
