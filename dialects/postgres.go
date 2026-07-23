@@ -95,17 +95,24 @@ func Postgres() *Dialect {
 	cfg.HeredocStringAlternative = tokens.PARAMETER
 
 	for keyword, tokenType := range map[string]tokens.TokenType{
-		"~":             tokens.RLIKE,
-		"@@":            tokens.DAT,
-		"@?":            tokens.AT_QMARK,
-		"@>":            tokens.AT_GT,
-		"<@":            tokens.LT_AT,
-		"?&":            tokens.QMARK_AMP,
-		"?|":            tokens.QMARK_PIPE,
-		"#-":            tokens.HASH_DASH,
-		"|/":            tokens.PIPE_SLASH,
-		"||/":           tokens.DPIPE_SLASH,
-		"BEGIN":         tokens.BEGIN,
+		"~":     tokens.RLIKE,
+		"@@":    tokens.DAT,
+		"@?":    tokens.AT_QMARK,
+		"@>":    tokens.AT_GT,
+		"<@":    tokens.LT_AT,
+		"?&":    tokens.QMARK_AMP,
+		"?|":    tokens.QMARK_PIPE,
+		"#-":    tokens.HASH_DASH,
+		"|/":    tokens.PIPE_SLASH,
+		"||/":   tokens.DPIPE_SLASH,
+		"BEGIN": tokens.BEGIN,
+		// START (as in `START TRANSACTION`) is a synonym for BEGIN — standard SQL, and exactly a
+		// transaction boundary in Postgres. mysql/presto/oracle already map "START"->BEGIN upstream;
+		// postgres does not, so upstream (and this port before) mis-parse `START TRANSACTION` as an
+		// Alias and error on its modes. This maps it so it routes through parseTransaction like BEGIN.
+		// Matches real PG; a grammar extension (upstream parse-errors it) — see DEVIATIONS
+		// 'Grammar extensions beyond upstream' and ledger id pg-start-transaction.
+		"START":         tokens.BEGIN,
 		"BIGSERIAL":     tokens.BIGSERIAL,
 		"CSTRING":       tokens.PSEUDO_TYPE,
 		"DECLARE":       tokens.COMMAND,

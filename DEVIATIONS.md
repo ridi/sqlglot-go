@@ -614,6 +614,31 @@ on the second; and the two PG-reserved value-keywords this port lexes as `VAR` (
 as *accept-invalid* (Postgres rejects them; the resulting `Cast` is denied anyway). Use the stable ledger id
 for the reconciliation lifecycle.
 
+Ledger ids [`pg-start-transaction`, `mysql-start-transaction-snapshot`](./testdata/upstream_extensions.jsonl)
+register `START TRANSACTION` transaction-control statements that pinned upstream parse-errors. Upstream maps
+`START` → `BEGIN` for mysql/presto/oracle but **not** postgres, so `parse_one("START TRANSACTION", "postgres")`
+mis-parses `START` as an expression and errors on the trailing `TRANSACTION`/modes; upstream also errors on
+Postgres `START TRANSACTION READ ONLY` (postgres lexes `ONLY` as a dedicated token, not `VAR`) and on MySQL
+`START TRANSACTION WITH CONSISTENT SNAPSHOT`. This port maps the postgres `START` keyword to the `BEGIN` token
+(as the other dialects already do upstream) so `START TRANSACTION [<modes>]` routes through the shared
+`parseTransaction` and builds `exp.Transaction{this, modes}`; the mode loop also consumes the `ONLY` token
+(postgres `READ ONLY`) and, **for MySQL only**, the `WITH CONSISTENT SNAPSHOT` phrase (a single mode string).
+`START TRANSACTION` normalizes to `BEGIN` on output, carrying the comma-separated modes. `COMMIT`/`ROLLBACK`/
+`BEGIN` and `start` used as an ordinary identifier/table/CTE/alias are unaffected (`tokens.BEGIN` is already
+in the id/alias token sets). The parser is permissive about mode content (matching upstream's mode loop), so a
+mode a given engine rejects at runtime — MySQL's standalone `ISOLATION LEVEL`, or a `START TRANSACTION READ
+ONLY` under a dialect that lacks it — may still parse to `Transaction`; only `WITH CONSISTENT SNAPSHOT` is
+dialect-gated (real MySQL 8.0.33 accepts it, real PostgreSQL 17.6 rejects it). This is a transaction boundary
+an AST consumer needs to route to session passthrough. Verified against PostgreSQL 17.6 and MySQL 8.0.33;
+implemented in `dialects/postgres.go` and `parser/stmt_transaction.go`; regression test
+`pg_start_transaction_test.go`. Use the stable ledger ids for the reconciliation lifecycle.
+
+**Known limitation** (a grammar-completeness gap, not a detection bypass): a user-defined Postgres function
+literally named `start` — `SELECT start()` — no longer parses as a function call (the `START` keyword now
+tokenizes as `BEGIN`), matching how pinned upstream already treats `start()` under mysql/presto/oracle. Bare
+`start` as a column/table/CTE/alias is unaffected; only the rare `start(...)` call form is lost. This is the
+same trade-off upstream itself makes for its `START`→`BEGIN` dialects.
+
 ---
 
 ## 2. Cross-dialect-only deviations (never affect same-dialect round-trip)
