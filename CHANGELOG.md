@@ -18,6 +18,13 @@ merged, tags the version and publishes the GitHub release. See
 [AGENTS.md § Releasing](./AGENTS.md#releasing). Entries for **v0.5.0 and earlier** were written by hand
 before release-please was adopted.
 
+## [0.20.0](https://github.com/ridi-oss/sqlglot-go/compare/v0.19.0...v0.20.0) (2026-07-24)
+
+
+### Features
+
+* **parser:** model Postgres [NOT] DEFERRABLE transaction mode ([#57](https://github.com/ridi-oss/sqlglot-go/issues/57)) ([cde680f](https://github.com/ridi-oss/sqlglot-go/commit/cde680f626c85f21ade7be9d2969e432b4c2bd0b))
+
 ## [0.19.0](https://github.com/ridi-oss/sqlglot-go/compare/v0.18.0...v0.19.0) (2026-07-23)
 
 
